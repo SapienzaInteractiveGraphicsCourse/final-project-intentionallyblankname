@@ -37,9 +37,26 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td><b>2 — Campo & Rendering</b></td><td>Vite + Three.js, campo GLTF, luci, tone mapping ACES</td></tr>
 <tr><td>✅</td><td><b>3 — Spectator Camera</b></td><td>Free-fly con Pointer Lock, WASD + Space/Shift</td></tr>
 <tr><td>✅</td><td><b>3.5 — Polish rendering</b></td><td>SSAO, SMAA, fix shadow acne, illuminazione lampioni</td></tr>
-<tr><td>⬜</td><td><b>4 — Basic Playable Robot</b></td><td>Modello gerarchico procedurale + movimento</td></tr>
+<tr><td>✅</td><td><b>4 — Basic Playable Robot</b></td><td>MANIPULATOR: modello gerarchico procedurale, debug menu, movimento/sterzata/mira/dash in Play mode. Solo questa classe — altre 3 da fare</td></tr>
 <tr><td>⬜</td><td><b>5 — Basic Basketball</b></td><td>Pallone + palleggio animato</td></tr>
 <tr><td>⬜</td><td><b>6 — Primo Polishing & Riallineamento</b></td><td>Rifinitura complessiva, riallineamento al piano</td></tr>
+</tbody>
+</table>
+
+---
+
+## Controls
+
+<table width="100%">
+<colgroup><col width="30%"><col width="70%"></colgroup>
+<thead><tr><th>Input</th><th>Effetto</th></tr></thead>
+<tbody>
+<tr><td><b>P</b></td><td>Apre/chiude pannello DEBUG (tuning parametrico del robot componente per componente + Copy Config) e pannello CAMERA</td></tr>
+<tr><td><b>M</b></td><td>Alterna modalità <b>Spectate</b> (free-fly) / <b>Play</b> (terza persona sul robot)</td></tr>
+<tr><td>Spectate: click + mouse + WASD + Space/Shift</td><td>Volo libero nella direzione esatta della camera</td></tr>
+<tr><td>Play: click + mouse</td><td>Orbita la camera attorno al robot; il pitch alza/abbassa leggermente il braccio</td></tr>
+<tr><td>Play: WASD</td><td>Muove il robot relativo a dove guarda la camera; le ruote sterzano verso la direzione di marcia, il braccio punta sempre dove guarda la camera</td></tr>
+<tr><td>Play: Shift sinistro</td><td>Dash nella direzione di marcia (cooldown 4s)</td></tr>
 </tbody>
 </table>
 
@@ -52,7 +69,7 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tbody>
 <tr><td><b>Core</b></td><td><img src="https://img.shields.io/badge/Three.js-e8c205?style=flat-square&logo=three.js&logoColor=black"> <img src="https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white"> <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black"></td></tr>
 <tr><td><b>Rendering</b></td><td><img src="https://img.shields.io/badge/GLTFLoader-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/EffectComposer-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/SSAO-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/SMAA-e8c205?style=flat-square"></td></tr>
-<tr><td><b>Animazione</b></td><td><img src="https://img.shields.io/badge/tween.js-e8c205?style=flat-square"></td></tr>
+<tr><td><b>Robot</b></td><td><img src="https://img.shields.io/badge/Procedural%20Hierarchy-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/Runtime%20Geometry%20Rebuild-e8c205?style=flat-square"></td></tr>
 <tr><td><b>Deploy</b></td><td><img src="https://img.shields.io/badge/GitHub%20Pages-222222?style=flat-square&logo=github&logoColor=white"></td></tr>
 </tbody>
 </table>
@@ -64,13 +81,13 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <table width="100%">
 <colgroup><col width="8%"><col width="92%"></colgroup>
 <tbody>
-<tr><td>⬜</td><td>Modello gerarchico robot con animazione strutturale (Step 4)</td></tr>
-<tr><td>⬜</td><td>Movimento robot controllato dall'utente</td></tr>
+<tr><td>✅</td><td>Modello gerarchico robot con animazione strutturale (MANIPULATOR)</td></tr>
+<tr><td>✅</td><td>Movimento robot controllato dall'utente (Play mode: WASD + mira mouse + dash)</td></tr>
+<tr><td>⬜</td><td>Altre 3 classi robot (COLOSSUS, GLITCH, SENTINEL)</td></tr>
 <tr><td>⬜</td><td>Pallone + palleggio animato (Step 5)</td></tr>
-<tr><td>⬜</td><td>Texture di almeno due tipi diversi (color map + normal/specular)</td></tr>
-<tr><td>⬜</td><td>Interazione utente reale (selezione robot, controlli partita)</td></tr>
-<tr><td>⬜</td><td>Maggior parte degli oggetti animata, nessuna animazione importata</td></tr>
-<tr><td>⬜</td><td>Perf: <code>light.shadow.autoUpdate = false</code> su sole e lampioni — le shadow map di campo/lampioni (statici) vengono ricalcolate ogni frame inutilmente (1 map 4096² + 4×6 map 512²); vanno congelate e aggiornate solo quando la scena statica cambia, prima che i robot mobili dello Step 4 aggiungano ombre dinamiche vere</td></tr>
+<tr><td>⬜</td><td>Texture di almeno due tipi diversi (color map + normal/specular) — solo color map finora</td></tr>
+<tr><td>⬜</td><td>Selezione robot da schermata iniziale</td></tr>
+<tr><td>⬜</td><td>Perf: <code>light.shadow.autoUpdate = false</code> su sole e lampioni — le shadow map di campo/lampioni (statici) vengono ricalcolate ogni frame inutilmente (1 map 4096² + 4×6 map 512²); vanno congelate e aggiornate solo quando la scena statica cambia, ora che il robot mobile aggiunge ombre dinamiche vere</td></tr>
 <tr><td>✅</td><td>GitHub Pages base configurata (<code>base: './'</code> in <code>vite.config.js</code>)</td></tr>
 <tr><td>⬜</td><td>GitHub Pages attivo e funzionante online</td></tr>
 <tr><td>⬜</td><td>Link GitHub Pages in questo README</td></tr>
