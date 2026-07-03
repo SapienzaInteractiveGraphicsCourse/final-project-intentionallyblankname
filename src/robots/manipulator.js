@@ -175,86 +175,103 @@ export function createManipulatorRobot() {
     base.position.y = discY + discHeight / 2
   }
 
-  // applica gli scale iniziali (disc/link1/link2/wheels/giunti) coerenti
-  // con state, e aggancia disco+base all'altezza reale delle ruote
+  // ruote/chassis agganciati subito alla scala iniziale (le altre parti si
+  // auto-applicano più sotto, richiamando i setter di controls)
   applyWheelsGroupScale()
   syncChassisHeight()
-  disc.scale.setScalar(state.discScale)
-  link1.scale.setScalar(state.link1Scale)
-  link2.scale.setScalar(state.link2Scale)
-  baseJoint.scale.setScalar(state.baseJointScale)
-  elbowJoint.scale.setScalar(state.elbowJointScale)
-  endEffector.scale.setScalar(state.endEffectorScale)
+
+  // dispose + riassegna: le geometrie non sono ridimensionabili "in place"
+  function replaceGeometry(mesh, newGeo) {
+    mesh.geometry.dispose()
+    mesh.geometry = newGeo
+  }
+
+  // setter "scale" generico: stessa forma per disc/link1/link2/giunti,
+  // cambia solo la state-key e la mesh target
+  function makeScaleSetter(key, mesh) {
+    return s => {
+      state[key] = s
+      mesh.scale.setScalar(s)
+    }
+  }
+
+  // genera Scale/Length/Thickness(+TipThickness) per un link, parametrico
+  // su mesh, funzione di geometria e giunto a valle da riposizionare —
+  // link1 e link2 differiscono solo per questi 4 argomenti
+  function createLinkControls({ statePrefix, mesh, downstreamJoint, buildGeometry, thicknessNames }) {
+    const lengthKey = `${statePrefix}Length`
+    function rebuild() {
+      const thicknessArgs = thicknessNames.map(name => state[`${statePrefix}${name}`])
+      replaceGeometry(mesh, buildGeometry(state[lengthKey], ...thicknessArgs))
+    }
+    const linkControls = {
+      [`${statePrefix}Scale`]: makeScaleSetter(`${statePrefix}Scale`, mesh),
+      [lengthKey](l) {
+        state[lengthKey] = l
+        rebuild()
+        downstreamJoint.position.y = l
+      },
+    }
+    thicknessNames.forEach(name => {
+      linkControls[`${statePrefix}${name}`] = t => {
+        state[`${statePrefix}${name}`] = t
+        rebuild()
+      }
+    })
+    return linkControls
+  }
 
   const controls = {
-    manipulatorScale(s) {
-      state.manipulatorScale = s
-      root.scale.setScalar(s)
-    },
+    manipulatorScale: makeScaleSetter('manipulatorScale', root),
     wheelsScale(s) {
       state.wheelsScale = s
       applyWheelsGroupScale()
       syncChassisHeight()
     },
-    discScale(s) {
-      state.discScale = s
-      disc.scale.setScalar(s)
-    },
+    discScale: makeScaleSetter('discScale', disc),
     discRadius(r) {
       state.discRadius = r
-      disc.geometry.dispose()
-      disc.geometry = new THREE.CylinderGeometry(r, r, discHeight, 32)
+      replaceGeometry(disc, new THREE.CylinderGeometry(r, r, discHeight, 32))
       applyWheelsGroupScale()
       syncChassisHeight()
     },
-    link1Scale(s) {
-      state.link1Scale = s
-      link1.scale.setScalar(s)
+    ...createLinkControls({
+      statePrefix: 'link1', mesh: link1, downstreamJoint: elbow,
+      buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'],
+    }),
+    ...createLinkControls({
+      statePrefix: 'link2', mesh: link2, downstreamJoint: wrist,
+      buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'],
+    }),
+    baseJointScale: makeScaleSetter('baseJointScale', baseJoint),
+    elbowJointScale: makeScaleSetter('elbowJointScale', elbowJoint),
+    endEffectorScale: makeScaleSetter('endEffectorScale', endEffector),
+
+    // --- Posa (mira/sterzata), non tracciata in state: cambia ogni frame,
+    // non è pensata per "Copy config" come le dimensioni sopra ---
+    setAimYaw(angle) {
+      base.rotation.y = angle
     },
-    link1Length(l) {
-      state.link1Length = l
-      link1.geometry.dispose()
-      link1.geometry = makeLinkGeometry(l, state.link1Thickness)
-      elbow.position.y = l
+    // offset di pitch relativo al riposo: la cinematica (gomito+polso sullo
+    // stesso asse si sommano, la paletta va rilivellata di conseguenza)
+    // resta qui, invece che duplicata anche in main.js
+    setAimPitch(pitchOffset) {
+      elbow.rotation.x = ELBOW_REST_PITCH + pitchOffset
+      paddle.rotation.x = -(elbow.rotation.x + WRIST_REST_PITCH)
     },
-    link1Thickness(t) {
-      state.link1Thickness = t
-      link1.geometry.dispose()
-      link1.geometry = makeLinkGeometry(state.link1Length, t)
-    },
-    link2Scale(s) {
-      state.link2Scale = s
-      link2.scale.setScalar(s)
-    },
-    link2Length(l) {
-      state.link2Length = l
-      link2.geometry.dispose()
-      link2.geometry = makeTaperedLinkGeometry(l, state.link2Thickness, state.link2TipThickness)
-      wrist.position.y = l
-    },
-    link2Thickness(t) {
-      state.link2Thickness = t
-      link2.geometry.dispose()
-      link2.geometry = makeTaperedLinkGeometry(state.link2Length, t, state.link2TipThickness)
-    },
-    link2TipThickness(t) {
-      state.link2TipThickness = t
-      link2.geometry.dispose()
-      link2.geometry = makeTaperedLinkGeometry(state.link2Length, state.link2Thickness, t)
-    },
-    baseJointScale(s) {
-      state.baseJointScale = s
-      baseJoint.scale.setScalar(s)
-    },
-    elbowJointScale(s) {
-      state.elbowJointScale = s
-      elbowJoint.scale.setScalar(s)
-    },
-    endEffectorScale(s) {
-      state.endEffectorScale = s
-      endEffector.scale.setScalar(s)
+    setWheelsYaw(angle) {
+      wheelsGroup.rotation.y = angle
     },
   }
+
+  // applica gli scale iniziali (disc/link1/link2/giunti) richiamando gli
+  // stessi setter esposti in controls, invece di duplicarne la logica
+  controls.discScale(state.discScale)
+  controls.link1Scale(state.link1Scale)
+  controls.link2Scale(state.link2Scale)
+  controls.baseJointScale(state.baseJointScale)
+  controls.elbowJointScale(state.elbowJointScale)
+  controls.endEffectorScale(state.endEffectorScale)
 
   function getConfig() {
     return { ...state }

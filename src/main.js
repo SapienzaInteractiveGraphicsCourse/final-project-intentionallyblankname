@@ -215,9 +215,6 @@ manipulator.root.traverse(child => {
   }
 })
 scene.add(manipulator.root)
-// posa di riposo del gomito, catturata prima di qualunque modifica: serve
-// come riferimento neutro per il coupling pitch-camera → gomito in Play
-const ELBOW_REST_X = manipulator.joints.elbow.rotation.x
 
 // --- Spectator Camera ---
 const controls = new PointerLockControls(camera, renderer.domElement)
@@ -233,17 +230,28 @@ document.addEventListener('keyup',   e => keys[e.code] = false)
 
 // --- Debug Menu (tasto P) ---
 const debugPanel = document.getElementById('debug-panel')
-const scaleSlider = document.getElementById('debug-scale-slider')
-const scaleValue = document.getElementById('debug-scale-value')
 
-scaleSlider.value = manipulator.root.scale.x
-scaleValue.textContent = manipulator.root.scale.x
+// Uno slider (label + valore + input range) è l'unità riusata sia dallo
+// slider "Manipulator Scale" in cima al pannello sia da ogni sezione di
+// "Manipulator Config" sotto — stessa funzione per entrambi invece di due
+// implementazioni parallele.
+function createSliderControl(container, { name, min, max, step, value, onChange }) {
+  const lbl = document.createElement('label')
+  const valSpan = document.createElement('span')
+  valSpan.textContent = value
+  lbl.append(`${name}: `, valSpan)
 
-scaleSlider.addEventListener('input', () => {
-  const s = parseFloat(scaleSlider.value)
-  manipulator.controls.manipulatorScale(s)
-  scaleValue.textContent = s
-})
+  const input = document.createElement('input')
+  Object.assign(input, { type: 'range', min, max, step, value })
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value)
+    valSpan.textContent = v
+    onChange(v)
+  })
+
+  container.append(lbl, input)
+  return input
+}
 
 // Sezione "Manipulator Config": un bottone per componente (ruote in
 // gruppo, disco, link1, link2), ognuno apre i propri slider. Generata da
@@ -254,58 +262,53 @@ function addComponentSection(container, label, sliders) {
   const panel = document.createElement('div')
   panel.className = 'component-panel hidden'
 
-  sliders.forEach(({ name, min, max, step, value, onChange }) => {
-    const lbl = document.createElement('label')
-    const valSpan = document.createElement('span')
-    valSpan.textContent = value
-    lbl.append(`${name}: `, valSpan)
-
-    const input = document.createElement('input')
-    Object.assign(input, { type: 'range', min, max, step, value })
-    input.addEventListener('input', () => {
-      const v = parseFloat(input.value)
-      valSpan.textContent = v
-      onChange(v)
-    })
-
-    panel.append(lbl, input)
-  })
+  sliders.forEach(sliderConfig => createSliderControl(panel, sliderConfig))
 
   btn.addEventListener('click', () => panel.classList.toggle('hidden'))
   container.append(btn, panel)
 }
 
+const cfg = manipulator.getConfig()
+
+createSliderControl(document.getElementById('manipulator-scale-container'), {
+  name: 'Manipulator Scale (overall)', min: 1, max: 50, step: 0.5,
+  value: cfg.manipulatorScale, onChange: manipulator.controls.manipulatorScale,
+})
+
 const manipulatorConfigBtn = document.getElementById('manipulator-config-btn')
 const manipulatorConfig = document.getElementById('manipulator-config')
 manipulatorConfigBtn.addEventListener('click', () => manipulatorConfig.classList.toggle('hidden'))
 
-const cfg = manipulator.getConfig()
+// range condiviso da tutti gli slider "Scale" per componente, invece della
+// stessa tripla min/max/step ripetuta 7 volte
+const SCALE_SLIDER_RANGE = { min: 0.2, max: 3, step: 0.05 }
+
 addComponentSection(manipulatorConfig, 'Wheels', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.wheelsScale, onChange: manipulator.controls.wheelsScale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.wheelsScale, onChange: manipulator.controls.wheelsScale },
 ])
 addComponentSection(manipulatorConfig, 'Disc', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.discScale, onChange: manipulator.controls.discScale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.discScale, onChange: manipulator.controls.discScale },
   { name: 'Radius', min: 0.5, max: 3, step: 0.05, value: cfg.discRadius, onChange: manipulator.controls.discRadius },
 ])
 addComponentSection(manipulatorConfig, 'Link 1', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.link1Scale, onChange: manipulator.controls.link1Scale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link1Scale, onChange: manipulator.controls.link1Scale },
   { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link1Length, onChange: manipulator.controls.link1Length },
   { name: 'Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link1Thickness, onChange: manipulator.controls.link1Thickness },
 ])
 addComponentSection(manipulatorConfig, 'Link 2', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.link2Scale, onChange: manipulator.controls.link2Scale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link2Scale, onChange: manipulator.controls.link2Scale },
   { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link2Length, onChange: manipulator.controls.link2Length },
   { name: 'Base Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link2Thickness, onChange: manipulator.controls.link2Thickness },
   { name: 'Tip Thickness', min: 0.02, max: 1, step: 0.01, value: cfg.link2TipThickness, onChange: manipulator.controls.link2TipThickness },
 ])
 addComponentSection(manipulatorConfig, 'Base Joint (sfera)', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.baseJointScale, onChange: manipulator.controls.baseJointScale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.baseJointScale, onChange: manipulator.controls.baseJointScale },
 ])
 addComponentSection(manipulatorConfig, 'Elbow Joint (sfera)', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.elbowJointScale, onChange: manipulator.controls.elbowJointScale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.elbowJointScale, onChange: manipulator.controls.elbowJointScale },
 ])
 addComponentSection(manipulatorConfig, 'End Effector (sfera)', [
-  { name: 'Scale', min: 0.2, max: 3, step: 0.05, value: cfg.endEffectorScale, onChange: manipulator.controls.endEffectorScale },
+  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.endEffectorScale, onChange: manipulator.controls.endEffectorScale },
 ])
 
 // "Copy config": serializza i parametri correnti pronti da incollare nel
@@ -326,12 +329,16 @@ copyConfigBtn.addEventListener('click', async () => {
 
 // --- Pannello Camera (posizione + angoli, sola lettura) ---
 const cameraPanel = document.getElementById('camera-panel')
-const camX = document.getElementById('cam-x')
-const camY = document.getElementById('cam-y')
-const camZ = document.getElementById('cam-z')
-const camPitch = document.getElementById('cam-pitch')
-const camYaw = document.getElementById('cam-yaw')
-const camRoll = document.getElementById('cam-roll')
+// [elemento, funzione che legge il valore corrente] invece di 6 variabili
+// + 6 assegnazioni .textContent speculari nel loop
+const camReadouts = [
+  ['cam-x', () => camera.position.x],
+  ['cam-y', () => camera.position.y],
+  ['cam-z', () => camera.position.z],
+  ['cam-pitch', () => THREE.MathUtils.radToDeg(camera.rotation.x)],
+  ['cam-yaw', () => THREE.MathUtils.radToDeg(camera.rotation.y)],
+  ['cam-roll', () => THREE.MathUtils.radToDeg(camera.rotation.z)],
+].map(([id, get]) => [document.getElementById(id), get])
 
 document.addEventListener('keydown', e => {
   if (e.code !== 'KeyP' || e.repeat) return
@@ -352,6 +359,21 @@ const camRight = new THREE.Vector3()
 // relativo a dove guarda ORA la camera (non assi mondo fissi). Le ruote
 // (yaw dell'intero wheelsGroup) puntano comunque verso il vettore di
 // movimento totale risultante via atan2.
+
+// converte un angolo orizzontale (stessa convenzione di robotFacing/
+// orbitYaw) in un vettore direzione — usato per camForward, dashDirection
+// e l'offset della camera in Play, invece di scrivere sin/cos a mano ogni
+// volta (un bug di segno su una di queste formule scritte a mano ha già
+// causato l'inversione di A/D)
+function angleToForward(angle, out) {
+  return out.set(Math.sin(angle), 0, Math.cos(angle))
+}
+// "destra" rispetto a un forward orizzontale: rotazione di -90° attorno a
+// Y, equivalente a cross(forward, worldUp)
+function rotateRight(forward, out) {
+  return out.set(-forward.z, 0, forward.x)
+}
+
 let mode = 'spectate'
 const modeIndicator = document.getElementById('mode-indicator')
 let robotFacing = 0 // yaw ruote/robot (rad), persiste quando fermo
@@ -396,7 +418,7 @@ let dashTimeRemaining = 0 // secondi rimanenti dello scatto in corso
 
 document.addEventListener('keydown', e => {
   if (e.code !== 'ShiftLeft' || e.repeat || mode !== 'play' || dashCooldown > 0) return
-  dashDirection.set(Math.sin(robotFacing), 0, Math.cos(robotFacing))
+  angleToForward(robotFacing, dashDirection)
   dashTimeRemaining = DASH_DURATION
   dashCooldown = DASH_COOLDOWN_TIME
 })
@@ -447,21 +469,18 @@ function animate() {
     // orbitYaw=0 la base è a riposo (nessuna rotazione extra) e il
     // braccio punta già "in avanti" di default. Indipendente dal
     // movimento: si mira col mouse, ci si muove con WASD
-    manipulator.joints.base.rotation.y = orbitYaw
+    manipulator.controls.setAimYaw(orbitYaw)
     // guardare su/giù (orbitPitch) alza/abbassa di poco l'end effector,
-    // ruotando il gomito e non l'ultimo link — coupling piccolo apposta
-    manipulator.joints.elbow.rotation.x = ELBOW_REST_X + (orbitPitch - ORBIT_PITCH_REST) * ELBOW_PITCH_COUPLING
-    // rilivella la paletta: la contro-rotazione iniziale era fissa, ma
-    // ora il gomito si muove col pitch quindi va ricalcolata ogni frame
-    manipulator.paddle.rotation.x = -(manipulator.joints.elbow.rotation.x + manipulator.joints.wrist.rotation.x)
+    // ruotando il gomito e non l'ultimo link — coupling piccolo apposta.
+    // setAimPitch gestisce internamente anche il rilivellamento della
+    // paletta (la cinematica gomito+polso resta dentro manipulator.js)
+    manipulator.controls.setAimPitch((orbitPitch - ORBIT_PITCH_REST) * ELBOW_PITCH_COUPLING)
 
     // assi camera flattened sul piano orizzontale (solo orbitYaw, non
     // pitch) così W spinge sempre in avanti sul terreno, non in diagonale
     // verso l'alto/basso quando la camera è inclinata
-    camForward.set(Math.sin(orbitYaw), 0, Math.cos(orbitYaw))
-    // cross(forward, up): stessa formula usata in Spectate (camDir × up),
-    // il segno opposto qui prima puntava a sinistra invece che a destra
-    camRightFlat.set(-Math.cos(orbitYaw), 0, Math.sin(orbitYaw))
+    angleToForward(orbitYaw, camForward)
+    rotateRight(camForward, camRightFlat)
 
     moveVec.set(0, 0, 0)
     if (keys['KeyW']) moveVec.add(camForward)
@@ -493,25 +512,22 @@ function animate() {
     // animata invece di un flip istantaneo
     const wheelsTargetAngle = robotFacing - Math.PI / 2
     wheelsCurrentAngle = lerpAngle(wheelsCurrentAngle, wheelsTargetAngle, 1 - Math.exp(-WHEEL_TURN_SPEED * delta))
-    manipulator.wheelsGroup.rotation.y = wheelsCurrentAngle
+    manipulator.controls.setWheelsYaw(wheelsCurrentAngle)
 
     const robotPos = manipulator.root.position
+    // camForward è già stato calcolato sopra per il movimento: riusato qui
+    // invece di un terzo sin/cos(orbitYaw) scritto a mano
     const horizDist = CHASE_DISTANCE * Math.cos(orbitPitch)
     camera.position.set(
-      robotPos.x - Math.sin(orbitYaw) * horizDist,
+      robotPos.x - camForward.x * horizDist,
       robotPos.y + LOOK_HEIGHT + CHASE_DISTANCE * Math.sin(orbitPitch),
-      robotPos.z - Math.cos(orbitYaw) * horizDist
+      robotPos.z - camForward.z * horizDist
     )
     camera.lookAt(robotPos.x, robotPos.y + LOOK_HEIGHT, robotPos.z)
   }
 
   if (!cameraPanel.classList.contains('hidden')) {
-    camX.textContent = camera.position.x.toFixed(1)
-    camY.textContent = camera.position.y.toFixed(1)
-    camZ.textContent = camera.position.z.toFixed(1)
-    camPitch.textContent = THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1)
-    camYaw.textContent = THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1)
-    camRoll.textContent = THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1)
+    camReadouts.forEach(([el, get]) => { el.textContent = get().toFixed(1) })
   }
 
   composer.render()

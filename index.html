@@ -8,6 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; }
     canvas { display: block; }
+    .hidden { display: none; }
     #hint {
       position: fixed;
       top: 50%;
@@ -20,10 +21,12 @@
       text-align: center;
       text-shadow: 0 0 8px #000;
     }
-    #debug-panel {
+
+    /* Pannelli laterali (debug/camera): stesso box, posizione/dimensioni
+       diverse per elemento */
+    .hud-panel {
       position: fixed;
       top: 16px;
-      left: 16px;
       background: rgba(0, 0, 0, 0.75);
       color: #fff;
       font-family: monospace;
@@ -31,16 +34,18 @@
       padding: 12px 16px;
       border: 1px solid #444;
       border-radius: 4px;
-      min-width: 240px;
-      max-height: calc(100vh - 32px);
-      overflow-y: auto;
     }
-    #debug-panel.hidden { display: none; }
-    #debug-panel h3 {
+    .hud-panel h3 {
       margin: 0 0 10px;
       font-size: 13px;
       letter-spacing: 1px;
       color: #e8942c;
+    }
+    #debug-panel {
+      left: 16px;
+      min-width: 240px;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
     }
     #debug-panel label {
       display: block;
@@ -69,7 +74,6 @@
       padding: 8px 10px;
       border-left: 2px solid #444;
     }
-    .component-panel.hidden { display: none; }
     #copy-config-btn { color: #e8942c; text-align: center; }
     #copy-config-feedback {
       font-size: 11px;
@@ -79,58 +83,37 @@
       margin-top: 4px;
     }
     #camera-panel {
-      position: fixed;
-      top: 16px;
       right: 16px;
-      background: rgba(0, 0, 0, 0.75);
-      color: #fff;
-      font-family: monospace;
-      font-size: 13px;
-      padding: 12px 16px;
-      border: 1px solid #444;
-      border-radius: 4px;
       min-width: 180px;
       pointer-events: none;
     }
-    #camera-panel.hidden { display: none; }
-    #camera-panel h3 {
-      margin: 0 0 10px;
-      font-size: 13px;
-      letter-spacing: 1px;
-      color: #e8942c;
-    }
     #camera-panel div { margin-bottom: 2px; }
-    #mode-indicator {
+
+    /* "Pillole" in basso (mode/dash): stesso box, colore/dimensione testo
+       diversi per elemento */
+    .hud-pill {
       position: fixed;
-      bottom: 16px;
       left: 50%;
       transform: translateX(-50%);
       background: rgba(0, 0, 0, 0.75);
-      color: #e8942c;
       font-family: monospace;
-      font-size: 13px;
       letter-spacing: 1px;
-      padding: 6px 14px;
       border: 1px solid #444;
       border-radius: 4px;
       pointer-events: none;
+    }
+    #mode-indicator {
+      bottom: 16px;
+      color: #e8942c;
+      font-size: 13px;
+      padding: 6px 14px;
     }
     #dash-panel {
-      position: fixed;
       bottom: 54px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.75);
       color: #fff;
-      font-family: monospace;
       font-size: 11px;
-      letter-spacing: 1px;
       padding: 5px 10px;
-      border: 1px solid #444;
-      border-radius: 4px;
-      pointer-events: none;
     }
-    #dash-panel.hidden { display: none; }
     #dash-bar-track {
       width: 140px;
       height: 8px;
@@ -150,17 +133,14 @@
 </head>
 <body>
   <div id="hint">Click per entrare<br><small>WASD · Space/Shift · Mouse · P per debug · M per modalità</small></div>
-  <div id="mode-indicator">MODE: SPECTATE</div>
-  <div id="dash-panel" class="hidden">
+  <div id="mode-indicator" class="hud-pill">MODE: SPECTATE</div>
+  <div id="dash-panel" class="hud-pill hidden">
     DASH
     <div id="dash-bar-track"><div id="dash-bar-fill"></div></div>
   </div>
-  <div id="debug-panel" class="hidden">
+  <div id="debug-panel" class="hud-panel hidden">
     <h3>DEBUG</h3>
-    <label for="debug-scale-slider">
-      Manipulator Scale (overall): <span id="debug-scale-value"></span>
-    </label>
-    <input type="range" id="debug-scale-slider" min="1" max="50" step="0.5" value="45">
+    <div id="manipulator-scale-container"></div>
 
     <button id="manipulator-config-btn">Manipulator Config ▸</button>
     <div id="manipulator-config" class="component-panel hidden"></div>
@@ -168,7 +148,7 @@
     <button id="copy-config-btn">Copy config</button>
     <div id="copy-config-feedback"></div>
   </div>
-  <div id="camera-panel" class="hidden">
+  <div id="camera-panel" class="hud-panel hidden">
     <h3>CAMERA</h3>
     <div>X: <span id="cam-x"></span></div>
     <div>Y: <span id="cam-y"></span></div>
