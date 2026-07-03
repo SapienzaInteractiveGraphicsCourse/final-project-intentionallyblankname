@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Robot Basketball</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+    #hint {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-family: monospace;
+      font-size: 18px;
+      pointer-events: none;
+      text-align: center;
+      text-shadow: 0 0 8px #000;
+    }
+  </style>
+</head>
+<body>
+  <div id="hint">Click per entrare<br><small>WASD · Space/Shift · Mouse</small></div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

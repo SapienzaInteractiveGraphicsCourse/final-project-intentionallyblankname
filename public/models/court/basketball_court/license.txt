@@ -1,0 +1,11 @@
+Model Information:
+* title:	BasketBall Court
+* source:	https://sketchfab.com/3d-models/basketball-court-acee9d1ddac2425d8272555cfce2c61b
+* author:	Stew004 (https://sketchfab.com/stew004)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "BasketBall Court" (https://sketchfab.com/3d-models/basketball-court-acee9d1ddac2425d8272555cfce2c61b) by Stew004 (https://sketchfab.com/stew004) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
