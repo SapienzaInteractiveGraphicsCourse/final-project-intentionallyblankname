@@ -40,6 +40,10 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td><b>4 — Basic Playable Robot</b></td><td>MANIPULATOR: modello gerarchico procedurale, debug menu, movimento/sterzata/mira/dash in Play mode. Solo questa classe — altre 3 da fare</td></tr>
 <tr><td>✅</td><td><b>5 — Basic Basketball</b></td><td>Pallone GLTF dedicato (color + normal + metallic/roughness map) e palleggio animato: macchina a stati push/drop/rise a timestep fisso, sincronizzata con la cinematica del braccio</td></tr>
 <tr><td>⬜</td><td><b>6 — Primo Polishing & Riallineamento</b></td><td>Rifinitura complessiva, riallineamento al piano</td></tr>
+<tr><td>⬜</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche, pick-up/dribble a bottone, Shooting System con HUD forza, verifica collisioni su dribble, Point System</td></tr>
+<tr><td>⬜</td><td><b>Section 3 — Enemies & Polish</b></td><td>Enemies 3v3 con AI, Steal/Block, personalizzazione menu, animation tweaks, rework Main Menu/HUD, secondo polishing e allineamento con esame</td></tr>
+<tr><td>⬜</td><td><b>Section 4 — Nuove Classi & Game Modes</b></td><td>Classe Drone (mossa "Uplifting"), Classe Legged Manipulator (mossa "Jump"), selettore Sunrise/Day/Sunset/Night, altre impostazioni globali, modalità di gioco (3v3 normale, beat the time, beat the score), polish finale</td></tr>
+<tr><td>⬜</td><td><b>Section 5 — Revisione Finale</b></td><td>Revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
 </tbody>
 </table>
 
@@ -89,6 +93,26 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td>Texture di almeno due tipi diversi (pallone: color + normal + metallic/roughness map; campo: solo color map)</td></tr>
 <tr><td>⬜</td><td>Selezione robot da schermata iniziale</td></tr>
 <tr><td>⬜</td><td>Perf: <code>light.shadow.autoUpdate = false</code> su sole e lampioni — le shadow map di campo/lampioni (statici) vengono ricalcolate ogni frame inutilmente (1 map 4096² + 4×6 map 512²); vanno congelate e aggiornate solo quando la scena statica cambia, ora che il robot mobile aggiunge ombre dinamiche vere</td></tr>
+<tr><td>⬜</td><td>Section 2: stabilire le classi e le loro statistiche (valori concreti per MANIPULATOR/COLOSSUS/GLITCH/SENTINEL)</td></tr>
+<tr><td>⬜</td><td>Section 2: Pick-up the ball / Dribble ball come azione a bottone, invece del palleggio sempre attivo automatico</td></tr>
+<tr><td>⬜</td><td>Section 2: fixare le interazioni tra le animazioni di pick-up e dribble</td></tr>
+<tr><td>⬜</td><td>Section 2: Shooting System — tiro al canestro con HUD per la forza, dipendente dalle stat</td></tr>
+<tr><td>⬜</td><td>Section 2: verificare se le collisioni vanno applicate anche al dribble</td></tr>
+<tr><td>⬜</td><td>Section 2: Point System, overlay HUD e/o texture fisiche in scena</td></tr>
+<tr><td>⬜</td><td>Section 3: Enemies (3v3) — AI e differenziazioni tra classi avversarie</td></tr>
+<tr><td>⬜</td><td>Section 3: personalizzazione menu colori</td></tr>
+<tr><td>⬜</td><td>Section 3: interazioni e stati aggiuntivi — "Steal"</td></tr>
+<tr><td>⬜</td><td>Section 3: Block/Steal (meccaniche difensive)</td></tr>
+<tr><td>⬜</td><td>Section 3: Animation Tweaks (rifinitura animazioni esistenti)</td></tr>
+<tr><td>⬜</td><td>Section 3: Main Menu e HUD rework (vedi "Tecniche UI da riprendere" sopra)</td></tr>
+<tr><td>⬜</td><td>Section 3: secondo polishing e allineamento con altri progetti e con l'esame</td></tr>
+<tr><td>⬜</td><td>Section 4: Classe Drone — stat + mossa speciale "Uplifting"</td></tr>
+<tr><td>⬜</td><td>Section 4: Classe Legged Manipulator — mossa speciale "Jump"</td></tr>
+<tr><td>⬜</td><td>Section 4: selettore Sunrise/Day/Sunset/Night (preset illuminazione)</td></tr>
+<tr><td>⬜</td><td>Section 4: altre impostazioni globali (Other Global Setting)</td></tr>
+<tr><td>⬜</td><td>Section 4: modalità di gioco effettive — 3v3 normale, beat the time, beat the score</td></tr>
+<tr><td>⬜</td><td>Section 4: polish finale e riallineamento</td></tr>
+<tr><td>⬜</td><td>Section 5: revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
 <tr><td>✅</td><td>GitHub Pages base configurata (<code>base: './'</code> in <code>vite.config.js</code>)</td></tr>
 <tr><td>⬜</td><td>GitHub Pages attivo e funzionante online</td></tr>
 <tr><td>⬜</td><td>Link GitHub Pages in questo README</td></tr>
@@ -205,6 +229,43 @@ Unificata anche la posa: prima `main.js` toccava gli interni del robot in due mo
 |---|---|---|---|
 | 1 | A fine `push`, ogni tanto (casuale) la palla entra in `drop` con velocità quasi nulla invece di quella reale della spinta — scatto visibile | La velocità di rilascio era letta come differenza finita a **singolo frame** (`Δy/delta`): se un micro-hitch di frame-rate capitava esattamente sul frame in cui l'ease della spinta satura (clamp a 1), il movimento residuo della paletta era piccolo ma il `delta` di quel frame grande → velocità stimata vicina a zero proprio nell'unico frame che eredita tutto il `drop` | Timestep fisso (`DRIBBLE_FIXED_DT = 1/120` + accumulator, disaccoppiato dal `delta` di rendering): la simulazione non vede mai un `delta` anomalo, solo passi costanti — il caso patologico non può più capitare |
 | 2 | Dopo il fix del timestep fisso, lo stesso reset di velocità (ora sempre uguale, non più casuale) si ripresentava **ad ogni ciclo** | `dribblePhaseT` accumula `dt = 1/120` (non rappresentabile esattamente in binario) per ~30 passi: arriva a un pelo **sotto** la soglia della durata di `push` invece che esattamente uguale — l'ease tocca `0.999999999999998` invece di `1`, e il controllo `>= 1` falliva per quell'epsilon, richiedendo un passo fisso extra "sprecato" (la paletta è già a fine corsa, non si muove) in cui `Δy = 0` esatto | Tolleranza sul confronto invece di uguaglianza stretta: `dribbleArmEase >= 1 - 1e-6` |
+
+---
+
+## Confronto con Altri Progetti del Corso (Step 6 — Polish)
+
+Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo anche scandagliato 7 altri progetti finali dello stesso corso (stessa consegna, stessa rubrica) per confrontare approcci a librerie, modellazione, animazione, fisica e texture. A differenza dello Step 1 (8 repo analizzati all'inizio, di cui non abbiamo mai salvato i nomi — persi), stavolta teniamo il link di ognuno.
+
+| Repo | Librerie oltre three.js | Modellazione | Animazione | Fisica | Texture | Rischio compliance |
+|---|---|---|---|---|---|---|
+| [a-space-odyssey](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-a-space-odyssey) | Tween.js, dat.GUI (vendored) | GLTF/FBX Mixamo rigged, importato | Tween.js su pose esportate da Blender | Nessuna (solo AABB box-check) | PBR completa | Alto — libreria di animazione su modello importato |
+| [thegoblinslayers](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-thegoblinslayers) | nessuna (CDN, no bundler) | Perlopiù GLTF importati; una trappola procedurale | `AnimationMixer`/`AnimationClip` sul personaggio principale | AABB, no engine | PBR 4K completa | Medio — Mixer su personaggio chiave |
+| [404nation](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-404nation) | tween.js (installata, mai usata) | Procedurale (Box/Sphere/Cone), factory pattern — simile al nostro | 100% imperativo, tween non usata nonostante la dipendenza | Gravità a griglia discreta (turn-based) | PBR reale (base+normal+roughness) | Basso — solo dipendenza morta |
+| [theboringgame](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-theboringgame) | cannon-es (fisica) + tween.js (animazione) | GLB rigged importato, livelli da JSON | State machine + tween.js sui bone | cannon-es, vero motore fisico | PBR completa (6 mappe) | Alto — entrambe le librerie usate attivamente |
+| [interactivelan](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-interactivelan) | simplex-noise (solo terreno) | GLTF rigged importato (Blender) | 100% imperativo, delta variabile | A* pathfinding + raycasting a mano | PBR completa (5 mappe) | Medio — modelli importati, niente lib di animazione |
+| [thehollowzone](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-thehollowzone) | tween.js (installata, mai usata) | Procedurale, gerarchia profonda per-arto | 100% imperativo, pattern reset+delta | AABB/cerchio a mano, no accumulator | PBR completa (4 mappe) | Basso — solo dipendenza morta |
+| [robot_factory](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-robot_factory) | nessuna, no bundler | Procedurale puro, il più profondo (braccio 7 giunti) | 100% imperativo | Mass-spring cable scritto a mano (Eulero) | `CanvasTexture` proceduali (bump+roughness) | Nessuno apparente — il più "pulito" |
+| **(il nostro)** | nessuna | Procedurale puro (3R + ruote) | 100% imperativo, timestep fisso (unici a farlo) | State machine a timestep fisso | Pallone: color+normal+metallic-roughness; campo: solo color | Basso |
+
+### Cosa abbiamo imparato
+
+- **`tween.js` installata-ma-mai-usata in 3 repo su 7** (a-space-odyssey la usa davvero, 404nation e thehollowzone no) — probabile boilerplate/template del corso che la include di default, non rimossa da chi non la usa.
+- **Solo 1 su 7 usa un motore fisico vero** (theboringgame → cannon-es). Tutti gli altri scrivono fisica/collisioni a mano, ma il nostro timestep fisso con accumulator è più sofisticato di chiunque altro (gli altri integrano direttamente sul `delta` variabile).
+- **Modellazione spaccata a metà**: 4/7 importano modelli riggati (a-space-odyssey, thegoblinslayers, theboringgame, interactivelan), 3/7 costruiscono tutto proceduralmente (404nation, thehollowzone, robot_factory) — noi compresi. I repo procedurali hanno anche il rischio di compliance più basso, non a caso.
+- **Siamo gli unici con un post-processing pipeline** (SSAO+SMAA) — nessun altro repo ha un `EffectComposer`.
+- **Sulle texture eravamo indietro, ora recuperato in parte**: tutti gli altri hanno set PBR completi (normal+roughness+AO, spesso 4-6 mappe) sui loro asset principali, quasi sempre **scaricati** da librerie di texture gratuite (nomi/risoluzioni tipiche di ambientCG/Poliigon). **Unica eccezione: `robot_factory`** (il progetto più simile al nostro per filosofia) genera le texture proceduralmente via `CanvasTexture`, senza asset esterni — abbiamo seguito lo stesso approccio per le texture del robot (normal map + roughness map generate in codice via height-field→gradiente, vedi `src/robots/manipulator.js`), invece di scaricare texture pronte come fa la maggioranza; per campo/pallone (già asset esterni non nostri) resta aperta l'opzione di scaricare qualcosa in futuro se necessario.
+- **GUI/debug**: `dat.GUI` compare una sola volta su 7 (a-space-odyssey); nessuno usa `lil-gui`; gli altri 6 (incluso `thehollowzone`) non hanno nessuna libreria GUI né un pannello debug visibile nel codice. Il nostro pannello fatto a mano non è un'anomalia, anzi è più elaborato della media.
+
+### Tecniche UI da riprendere (da `thehollowzone`)
+
+`thehollowzone` non usa una libreria GUI, ma i suoi menu (main menu, pausa, game over, vittoria) sono notevolmente più curati del nostro pannello debug in stile "terminale monospace". Tecnica: **pura HTML/CSS sovrapposta al canvas**, niente three.js coinvolto — ogni schermata è una funzione (`showMainMenu()`, ecc.) che scrive un template literal HTML in un div overlay, non file HTML separati. Da riusare quando faremo il polish della nostra UI:
+
+1. **Più font Google mescolati per ruolo**, non il default di sistema: un font bold/da poster per i titoli (`Black Ops One`), uno "da interfaccia" per label/bottoni (`Oxanium`), uno leggibile per il corpo testo (`Roboto Condensed`), uno monospace per readout tecnici/numeri (`Space Mono`).
+2. **`clip-path: polygon(...)`** sui pannelli invece di rettangoli/bordi arrotondati — angoli tagliati a 45° per un effetto "pannello HUD sci-fi".
+3. **`backdrop-filter: blur(16px)`** sul pannello semi-trasparente — effetto vetro smerigliato sopra il gameplay dietro.
+4. **Pseudo-elementi `::before`/`::after`** per dettagli decorativi (linee accento con `box-shadow` colorato tipo neon, angoli con bordini) senza sporcare l'HTML.
+5. **Variabili CSS** (`--ui-red`, `--ui-gold`, `--ui-panel`, ecc.) per un sistema colore coerente in tutta l'interfaccia.
+6. **`@keyframes` per l'ingresso dei pannelli** (es. `panel-arrival`) invece di comparire di scatto.
 
 ---
 

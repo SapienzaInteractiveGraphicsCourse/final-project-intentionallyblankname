@@ -404,7 +404,7 @@ addComponentSection(manipulatorAnimation, 'Play Aim', [
   { name: 'Arm Yaw Offset (deg)', min: -180, max: 180, step: 1, value: ARM_YAW_OFFSET_DEG, onChange: v => { ARM_YAW_OFFSET_DEG = v } },
   {
     name: 'Crosshair Height (px)', min: 0, max: 300, step: 5, value: CROSSHAIR_HEIGHT,
-    onChange: v => { CROSSHAIR_HEIGHT = v; crosshair.style.top = `calc(50% - ${CROSSHAIR_HEIGHT}px)` },
+    onChange: v => { CROSSHAIR_HEIGHT = v; updateCrosshairPosition() },
   },
 ])
 
@@ -557,7 +557,12 @@ function lerpAngle(current, target, factor) {
 const dashPanel = document.getElementById('dash-panel')
 const dashBarFill = document.getElementById('dash-bar-fill')
 const crosshair = document.getElementById('crosshair')
-crosshair.style.top = `calc(50% - ${CROSSHAIR_HEIGHT}px)`
+// riusata anche dallo slider "Crosshair Height" nel pannello debug, invece
+// di ripetere la stessa formula in due punti
+function updateCrosshairPosition() {
+  crosshair.style.top = `calc(50% - ${CROSSHAIR_HEIGHT}px)`
+}
+updateCrosshairPosition()
 const dashDirection = new THREE.Vector3()
 const DASH_COOLDOWN_TIME = 4
 const DASH_DURATION = 0.15
@@ -638,7 +643,10 @@ const paddleWorldPos = new THREE.Vector3()
 // (BALL_OFFSET_* dichiarate più sopra, tarabili da debug)
 const paddleForwardDir = new THREE.Vector3()
 const paddleSideDir = new THREE.Vector3()
-const paddleDownDir = new THREE.Vector3()
+// costante (mai riassegnato): "giù" è sempre il basso reale del mondo,
+// non dipende da nessun angolo — impostato una volta qui invece che ad
+// ogni passo fisso del palleggio (120/s) dentro updateDribble()
+const paddleDownDir = new THREE.Vector3(0, -1, 0)
 
 // timestep fisso per la simulazione del palleggio, disaccoppiato dal
 // framerate di rendering (accumulator pattern): il render loop gira a
@@ -674,8 +682,7 @@ function updateDribble(dt) {
   }
   // applicata PRIMA di leggere la world position della paletta, altrimenti
   // sarebbe in ritardo di un frame rispetto alla posa appena decisa sopra
-  manipulator.controls.setDribbleElbow(dribbleArmEase * elbowAmplitude)
-  manipulator.controls.setDribbleLink1(dribbleArmEase * link1Amplitude)
+  manipulator.controls.setDribbleOffsets(dribbleArmEase * elbowAmplitude, dribbleArmEase * link1Amplitude)
 
   // updateWorldMatrix forza il ricalcolo subito (matrixWorld si aggiorna
   // di norma solo durante il render, quindi senza sarebbe in ritardo di
@@ -693,7 +700,6 @@ function updateDribble(dt) {
   // rilevante, Down è sempre il basso reale del mondo
   angleToForward(manipulator.joints.base.rotation.y, paddleForwardDir)
   rotateRight(paddleForwardDir, paddleSideDir)
-  paddleDownDir.set(0, -1, 0)
   paddleWorldPos
     .addScaledVector(paddleForwardDir, BALL_OFFSET_FORWARD)
     .addScaledVector(paddleSideDir, BALL_OFFSET_SIDE)

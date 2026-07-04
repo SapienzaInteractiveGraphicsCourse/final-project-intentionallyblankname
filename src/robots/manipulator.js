@@ -1,5 +1,103 @@
 import * as THREE from 'three'
 
+// --- Texture PBR procedurali (nessun asset esterno) ---
+// Il robot è interamente procedurale (primitive Three.js, niente modelli
+// importati) — coerente con questo, anche le sue texture sono generate in
+// codice via <canvas> invece di scaricare file PBR pronti. Tecnica:
+// 1) si disegna un height-field in scala di grigi (il pattern cambia per
+//    materiale: graffi paralleli per il metallo, grana a puntini per la
+//    gomma/plastica); 2) la normal map si ricava dal GRADIENTE dell'altezza
+//    (differenza coi pixel vicini, wrap ai bordi per un tiling seamless);
+//    3) la roughness map usa lo stesso height-field (i graffi/rilievi sono
+//    leggermente più lucidi) più rumore casuale per una variazione organica.
+function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, roughnessVariation }) {
+  const heightCanvas = document.createElement('canvas')
+  heightCanvas.width = heightCanvas.height = size
+  const hctx = heightCanvas.getContext('2d')
+  hctx.fillStyle = '#808080'
+  hctx.fillRect(0, 0, size, size)
+  drawHeightField(hctx, size)
+  const heightData = hctx.getImageData(0, 0, size, size).data
+  // modulo per il wrap: il gradiente ai bordi del canvas legge dal lato
+  // opposto invece di "cadere nel vuoto", così la texture si ripete senza
+  // cuciture visibili quando RepeatWrapping la tila sulla mesh
+  const heightAt = (x, y) => {
+    const xi = (x + size) % size, yi = (y + size) % size
+    return heightData[(yi * size + xi) * 4] / 255
+  }
+
+  const normalCanvas = document.createElement('canvas')
+  normalCanvas.width = normalCanvas.height = size
+  const nctx = normalCanvas.getContext('2d')
+  const normalImg = nctx.createImageData(size, size)
+  const roughCanvas = document.createElement('canvas')
+  roughCanvas.width = roughCanvas.height = size
+  const rctx = roughCanvas.getContext('2d')
+  const roughImg = rctx.createImageData(size, size)
+
+  const NORMAL_STRENGTH = 2.5 // amplifica il rilievo percepito, l'height-field di per sé è molto sottile
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // gradiente centrale (differenza coi vicini) sui due assi: la normale
+      // punta "in salita" contro il verso del gradiente, Z=1 di base (piatta)
+      const dx = (heightAt(x + 1, y) - heightAt(x - 1, y)) * NORMAL_STRENGTH
+      const dy = (heightAt(x, y + 1) - heightAt(x, y - 1)) * NORMAL_STRENGTH
+      const len = Math.hypot(dx, dy, 1)
+      const i = (y * size + x) * 4
+      normalImg.data[i] = (-dx / len * 0.5 + 0.5) * 255
+      normalImg.data[i + 1] = (-dy / len * 0.5 + 0.5) * 255
+      normalImg.data[i + 2] = (1 / len * 0.5 + 0.5) * 255
+      normalImg.data[i + 3] = 255
+
+      const h = heightAt(x, y)
+      const roughness = THREE.MathUtils.clamp(
+        baseRoughness + (h - 0.5) * -0.3 + (Math.random() - 0.5) * roughnessVariation, 0, 1
+      ) * 255
+      roughImg.data[i] = roughImg.data[i + 1] = roughImg.data[i + 2] = roughness
+      roughImg.data[i + 3] = 255
+    }
+  }
+  nctx.putImageData(normalImg, 0, 0)
+  rctx.putImageData(roughImg, 0, 0)
+
+  const normalMap = new THREE.CanvasTexture(normalCanvas)
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas)
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping
+  normalMap.repeat.set(4, 4)
+  roughnessMap.repeat.set(4, 4)
+  return { normalMap, roughnessMap }
+}
+
+// pattern "metallo spazzolato": righe sottili quasi orizzontali, luminosità
+// e spessore casuali — per bodyMat/armMat (chassis, braccio, giunti)
+function drawBrushedMetal(ctx, size, count = 400) {
+  for (let i = 0; i < count; i++) {
+    const y = Math.random() * size
+    const bright = 128 + (Math.random() - 0.5) * 18
+    ctx.strokeStyle = `rgb(${bright},${bright},${bright})`
+    ctx.lineWidth = Math.random() < 0.5 ? 1 : 2
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(size, y + (Math.random() - 0.5) * 4)
+    ctx.stroke()
+  }
+}
+
+// pattern "grana gomma/plastica": puntini sparsi di dimensione e luminosità
+// variabili — per wheelMat (gomma ruote) e accentMat (plastica paletta)
+function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
+  for (let i = 0; i < count; i++) {
+    const x = Math.random() * size, y = Math.random() * size
+    const r = 1 + Math.random() * maxRadius
+    const bright = 128 + (Math.random() - 0.5) * 40
+    ctx.fillStyle = `rgb(${bright},${bright},${bright})`
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
 // Classe MANIPULATOR: locomozione a ruote, manipolatore 3R sopra un disco.
 // R1 (base) ruota su asse verticale (yaw). R2/R3 (gomito/polso) ruotano
 // su asse orizzontale (pitch), come un braccio planare montato su una
@@ -13,10 +111,17 @@ import * as THREE from 'three'
 export function createManipulatorRobot() {
   const root = new THREE.Group()
 
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.4 })
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.1 })
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.4, metalness: 0.5 })
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0xe8942c, roughness: 0.3, metalness: 0.3 })
+  // baseRoughness passato a createProceduralPBRMaps combacia col roughness
+  // "piatto" del materiale: la roughness map poi ci varia sopra, non lo sostituisce
+  const bodyMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
+  const wheelMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 900, 2.5), baseRoughness: 0.8, roughnessVariation: 0.15 })
+  const armMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
+  const accentMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 1400, 1.4), baseRoughness: 0.3, roughnessVariation: 0.1 })
+
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.4, normalMap: bodyMaps.normalMap, roughnessMap: bodyMaps.roughnessMap })
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.1, normalMap: wheelMaps.normalMap, roughnessMap: wheelMaps.roughnessMap })
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.4, metalness: 0.5, normalMap: armMaps.normalMap, roughnessMap: armMaps.roughnessMap })
+  const accentMat = new THREE.MeshStandardMaterial({ color: 0xe8942c, roughness: 0.3, metalness: 0.3, normalMap: accentMaps.normalMap, roughnessMap: accentMaps.roughnessMap })
 
   // stato corrente dei parametri modificabili da debug, usato sia per
   // ricostruire le geometrie sia per COPY config. Valori di partenza presi
@@ -52,7 +157,6 @@ export function createManipulatorRobot() {
   const wheelOffsetX = 0.9
   const wheelOffsetZ = 0.9
   const wheelsGroup = new THREE.Group()
-  const wheels = []
   ;[
     [-wheelOffsetX, -wheelOffsetZ],
     [wheelOffsetX, -wheelOffsetZ],
@@ -62,7 +166,6 @@ export function createManipulatorRobot() {
     const wheel = new THREE.Mesh(wheelGeo, wheelMat)
     wheel.position.set(x, wheelOuterRadius, z)
     wheelsGroup.add(wheel)
-    wheels.push(wheel)
   })
   root.add(wheelsGroup)
 
@@ -326,17 +429,17 @@ export function createManipulatorRobot() {
       applyArmPitch()
     },
     // palleggio automatico (sempre attivo, non solo Play): offset di pitch
-    // sul gomito, si somma a setAimPitch invece di sostituirlo
-    setDribbleElbow(offset) {
-      dribbleElbowOffset = offset
+    // su gomito e link1 (proporzionale, ampiezza minore, decisa da chi
+    // chiama in main.js) applicati insieme in una sola chiamata — prima
+    // erano due setter separati (setDribbleElbow/setDribbleLink1) chiamati
+    // in sequenza da main.js, ognuno con la propria chiamata a levelPaddle():
+    // la prima leggeva link1Group.rotation.x non ancora aggiornato dalla
+    // seconda, quindi il suo risultato veniva scartato subito dopo — un
+    // ricalcolo scartato ad ogni singolo passo del palleggio (120/s)
+    setDribbleOffsets(elbowOffset, link1Offset) {
+      dribbleElbowOffset = elbowOffset
+      link1Group.rotation.x = link1Offset
       applyArmPitch()
-    },
-    // stessa sorgente di offset del gomito (proporzionale, ampiezza minore
-    // decisa da chi chiama in main.js): link1Group porta con sé gomito e
-    // tutto il resto della catena, quindi "si piega" invece di scollegarsi
-    setDribbleLink1(offset) {
-      link1Group.rotation.x = offset
-      levelPaddle()
     },
     paddleAngle(a) {
       state.paddleAngle = a
@@ -367,18 +470,11 @@ export function createManipulatorRobot() {
 
   return {
     root,
-    wheels,
     wheelsGroup,
-    disc,
-    link1,
-    link2,
     joints: { base, elbow, wrist },
-    endEffector,
     // paddleCenter (non paddleGroup): il punto di tracking esterno deve
     // essere al centro della paletta, non sul giunto di aggancio
     paddle: paddleCenter,
-    paddleLeft,
-    paddleRight,
     controls,
     getConfig,
   }
