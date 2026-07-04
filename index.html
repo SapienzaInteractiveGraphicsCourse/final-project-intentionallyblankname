@@ -129,6 +129,18 @@
       transition: background-color 0.15s;
     }
     #dash-bar-fill.ready { background: #6ec26e; }
+
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-family: monospace;
+      font-size: 20px;
+      pointer-events: none;
+      text-shadow: 0 0 4px #000;
+    }
   </style>
 </head>
 <body>
@@ -138,15 +150,9 @@
     DASH
     <div id="dash-bar-track"><div id="dash-bar-fill"></div></div>
   </div>
+  <div id="crosshair" class="hidden">+</div>
   <div id="debug-panel" class="hud-panel hidden">
     <h3>DEBUG</h3>
-    <div id="manipulator-scale-container"></div>
-
-    <button id="manipulator-config-btn">Manipulator Config ▸</button>
-    <div id="manipulator-config" class="component-panel hidden"></div>
-
-    <button id="copy-config-btn">Copy config</button>
-    <div id="copy-config-feedback"></div>
   </div>
   <div id="camera-panel" class="hud-panel hidden">
     <h3>CAMERA</h3>
@@ -156,6 +162,12 @@
     <div>Pitch: <span id="cam-pitch"></span>°</div>
     <div>Yaw: <span id="cam-yaw"></span>°</div>
     <div>Roll: <span id="cam-roll"></span>°</div>
+    <div>Phase: <span id="dribble-phase"></span></div>
+    <div>Arm Ease: <span id="dribble-arm-ease"></span></div>
+    <div>Ball Y: <span id="ball-y"></span></div>
+    <div>Paddle Y: <span id="paddle-y"></span></div>
+    <div>Gap (live): <span id="ball-paddle-gap"></span></div>
+    <div>Reconnect Gap: <span id="reconnect-gap"></span></div>
   </div>
   <script type="module" src="./src/main.js"></script>
 </body>

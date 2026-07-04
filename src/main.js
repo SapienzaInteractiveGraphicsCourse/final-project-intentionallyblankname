@@ -125,6 +125,13 @@ lampPositions.forEach(([x, y, z]) => {
   // per un bordo ombra più morbido (blur a raggio fisso, non vera
   // penombra fisica, ma è il trucco economico standard)
   lamp.shadow.radius = 6
+  // bias/normalBias a 0 (default) causavano lo stesso shadow acne già
+  // visto sul sole (vedi sopra) ma qui sul muro vicino al lampione: un
+  // pattern moiré/a onde per self-shadowing su superficie quasi parallela
+  // alla luce, con mapSize 512 basso su un frustum near=30/far=400 —
+  // stessa causa, stesso fix
+  lamp.shadow.bias = -0.0005
+  lamp.shadow.normalBias = 2
   scene.add(lamp)
 })
 
@@ -194,8 +201,65 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
       child.material = child.material.clone()
       child.material.color.set(0x2b2b2e)
     }
+    // pallone incluso nel modello del campo (unico mesh con texture
+    // immagine vera, Mat.3_diffuse.jpeg) — rimosso, ne usiamo uno dedicato
+    if (child.name === 'Sphere_Mat3_0') {
+      child.parent.remove(child)
+    }
   })
   scene.add(gltf.scene)
+})
+
+// --- Pallone (modello dedicato: color map + normal map + metallic/roughness) ---
+// let (non const): regolabili a runtime dal pannello debug (Basketball/
+// Manipulator Animation → Dribble), dichiarate qui perché lette già dal
+// setup del debug menu più sotto, prima del blocco fisica nel render loop
+let BALL_RADIUS = 15 // unità mondo (~cm-scale) — sfera sorgente ha raggio 1
+// const (non più regolabili da debug): valori fissati dopo il tuning
+const BALL_GRAVITY = 820       // unità/s² (scena ≈ cm-scale), non più il valore g reale
+const BALL_BOUNCE_SPEED = 415  // velocità impressa ad ogni rimbalzo
+// il punto di tracking (manipulator.paddle = paddleCenter) non coincide col
+// centro visivo reale della paletta a occhio: questi 3 offset (unità
+// mondo) si sommano in animate(), lungo gli assi LOCALI della paletta
+// (non mondo, così restano corretti mentre si inclina/tilta) — Forward =
+// lungo la paletta (asse locale Z), Side = di lato (asse locale X), Down =
+// verso il basso reale della paletta (asse locale -Y). Tarati da debug
+// (Basketball → Ball Offset), non da fisica/geometria
+let BALL_OFFSET_FORWARD = 6
+let BALL_OFFSET_SIDE = 0
+let BALL_OFFSET_DOWN = 12
+// offset yaw del braccio in Play (gradi, sommato a orbitYaw ogni frame) e
+// altezza del crosshair (px sopra il centro schermo) — anche questi
+// dichiarati qui per lo stesso motivo di BALL_*: letti già dal setup del
+// debug menu sotto
+let ARM_YAW_OFFSET_DEG = -36
+let CROSSHAIR_HEIGHT = 115
+// palleggio: durata della spinta verso il basso (gomito+link1) e ampiezza
+// del piegamento di ciascuno (gradi) — stessa ampiezza usata sia nella
+// spinta (push) sia nella risalita in sincrono col rimbalzo (rise)
+let DRIBBLE_PUSH_DURATION = 0.25
+let DRIBBLE_ELBOW_AMPLITUDE_DEG = 40
+let DRIBBLE_LINK1_AMPLITUDE_DEG = 10
+// quanto ci mette lockOffset (vedi sotto) a riassorbirsi a inizio 'push':
+// finestra breve rispetto a DRIBBLE_PUSH_DURATION, così per il resto della
+// spinta (mentre il link si piega, visibilmente) la palla è già a offset
+// zero e segue ESATTAMENTE la paletta, invece di continuare a "cadere"
+// per conto suo sull'intera durata della spinta
+let DRIBBLE_LOCK_ABSORB_TIME = 0.25
+// piccolo offset costante (unità mondo) sottratto dalla Y balistica pura
+// di 'rise' (vedi riseBallisticY in animate()), non un clamp: a 0 la
+// traiettoria è la fisica pura, invariata
+let DRIBBLE_RISE_Y_CORRECTION = 7
+let basketball = null
+loader.load('./models/basketball_ball/scene.gltf', gltf => {
+  gltf.scene.scale.setScalar(BALL_RADIUS)
+  gltf.scene.traverse(child => {
+    if (!child.isMesh) return
+    child.castShadow = true
+    child.receiveShadow = true
+  })
+  basketball = gltf.scene
+  scene.add(basketball)
 })
 
 // --- Robot (Step 4: solo modello statico, no animazione/movimento ancora) ---
@@ -253,35 +317,44 @@ function createSliderControl(container, { name, min, max, step, value, onChange 
   return input
 }
 
-// Sezione "Manipulator Config": un bottone per componente (ruote in
-// gruppo, disco, link1, link2), ognuno apre i propri slider. Generata da
-// JS invece che duplicare il markup 4 volte in HTML.
-function addComponentSection(container, label, sliders) {
+// Bottone che apre/chiude un pannello: unità base di tutte le sezioni
+// collassabili del menu debug (contenitori annidabili e gruppi di slider
+// sono la stessa cosa, cambia solo cosa ci va dentro).
+function createToggleSection(container, label) {
   const btn = document.createElement('button')
   btn.textContent = `${label} ▸`
   const panel = document.createElement('div')
   panel.className = 'component-panel hidden'
-
-  sliders.forEach(sliderConfig => createSliderControl(panel, sliderConfig))
-
   btn.addEventListener('click', () => panel.classList.toggle('hidden'))
   container.append(btn, panel)
+  return panel
+}
+
+// Sezione con un bottone + i suoi slider dentro (es. Wheels, Disc, Dribble).
+function addComponentSection(container, label, sliders) {
+  const panel = createToggleSection(container, label)
+  sliders.forEach(sliderConfig => createSliderControl(panel, sliderConfig))
 }
 
 const cfg = manipulator.getConfig()
 
-createSliderControl(document.getElementById('manipulator-scale-container'), {
+// range condiviso da tutti gli slider "Scale" per componente, invece della
+// stessa tripla min/max/step ripetuta 7 volte
+const SCALE_SLIDER_RANGE = { min: 0.2, max: 3, step: 0.05 }
+// estremi degli slider Paddle Angle/Tilt — baseline attuale tarata proprio
+// su questi massimi (vedi state.paddleAngle/paddleTilt in manipulator.js)
+const PADDLE_ANGLE_MAX = 2.4
+const PADDLE_TILT_MAX = 1.2
+
+// --- Manipulator Shape: dimensioni statiche (scale/length/thickness) ---
+const manipulatorShape = createToggleSection(debugPanel, 'Manipulator Shape')
+
+createSliderControl(manipulatorShape, {
   name: 'Manipulator Scale (overall)', min: 1, max: 50, step: 0.5,
   value: cfg.manipulatorScale, onChange: manipulator.controls.manipulatorScale,
 })
 
-const manipulatorConfigBtn = document.getElementById('manipulator-config-btn')
-const manipulatorConfig = document.getElementById('manipulator-config')
-manipulatorConfigBtn.addEventListener('click', () => manipulatorConfig.classList.toggle('hidden'))
-
-// range condiviso da tutti gli slider "Scale" per componente, invece della
-// stessa tripla min/max/step ripetuta 7 volte
-const SCALE_SLIDER_RANGE = { min: 0.2, max: 3, step: 0.05 }
+const manipulatorConfig = createToggleSection(manipulatorShape, 'Manipulator Config')
 
 addComponentSection(manipulatorConfig, 'Wheels', [
   { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.wheelsScale, onChange: manipulator.controls.wheelsScale },
@@ -310,13 +383,67 @@ addComponentSection(manipulatorConfig, 'Elbow Joint (sfera)', [
 addComponentSection(manipulatorConfig, 'End Effector (sfera)', [
   { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.endEffectorScale, onChange: manipulator.controls.endEffectorScale },
 ])
+addComponentSection(manipulatorConfig, 'Paddle (V)', [
+  { name: 'Angle', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: cfg.paddleAngle, onChange: manipulator.controls.paddleAngle },
+  { name: 'Tilt (down)', min: -PADDLE_TILT_MAX, max: PADDLE_TILT_MAX, step: 0.02, value: cfg.paddleTilt, onChange: manipulator.controls.paddleTilt },
+])
 
-// "Copy config": serializza i parametri correnti pronti da incollare nel
-// codice (stesso schema usato finora per hardcodare scala/spawn camera)
-const copyConfigBtn = document.getElementById('copy-config-btn')
-const copyConfigFeedback = document.getElementById('copy-config-feedback')
+// --- Manipulator Animation: parametri delle animazioni (non la forma) ---
+const manipulatorAnimation = createToggleSection(debugPanel, 'Manipulator Animation')
+
+addComponentSection(manipulatorAnimation, 'Dribble', [
+  { name: 'Push Duration (s)', min: 0.05, max: 1, step: 0.01, value: DRIBBLE_PUSH_DURATION, onChange: v => { DRIBBLE_PUSH_DURATION = v } },
+  { name: 'Elbow Amplitude (deg)', min: 0, max: 45, step: 1, value: DRIBBLE_ELBOW_AMPLITUDE_DEG, onChange: v => { DRIBBLE_ELBOW_AMPLITUDE_DEG = v } },
+  { name: 'Link 1 Amplitude (deg)', min: 0, max: 25, step: 0.5, value: DRIBBLE_LINK1_AMPLITUDE_DEG, onChange: v => { DRIBBLE_LINK1_AMPLITUDE_DEG = v } },
+  { name: 'Lock Absorb Time (s)', min: 0.01, max: 0.3, step: 0.01, value: DRIBBLE_LOCK_ABSORB_TIME, onChange: v => { DRIBBLE_LOCK_ABSORB_TIME = v } },
+  { name: 'Rise Y Correction', min: 0, max: 25, step: 1, value: DRIBBLE_RISE_Y_CORRECTION, onChange: v => { DRIBBLE_RISE_Y_CORRECTION = v } },
+])
+// placeholder: nessuna animazione di tiro implementata ancora
+createToggleSection(manipulatorAnimation, 'Shoot')
+addComponentSection(manipulatorAnimation, 'Play Aim', [
+  { name: 'Arm Yaw Offset (deg)', min: -180, max: 180, step: 1, value: ARM_YAW_OFFSET_DEG, onChange: v => { ARM_YAW_OFFSET_DEG = v } },
+  {
+    name: 'Crosshair Height (px)', min: 0, max: 300, step: 5, value: CROSSHAIR_HEIGHT,
+    onChange: v => { CROSSHAIR_HEIGHT = v; crosshair.style.top = `calc(50% - ${CROSSHAIR_HEIGHT}px)` },
+  },
+])
+
+// --- Basketball ---
+const basketballConfig = createToggleSection(debugPanel, 'Basketball')
+createSliderControl(basketballConfig, {
+  name: 'Scale', min: 5, max: 40, step: 1, value: BALL_RADIUS,
+  onChange: v => {
+    BALL_RADIUS = v
+    if (basketball) basketball.scale.setScalar(v)
+  },
+})
+addComponentSection(basketballConfig, 'Ball Offset (da centro paletta)', [
+  { name: 'Forward', min: -40, max: 40, step: 1, value: BALL_OFFSET_FORWARD, onChange: v => { BALL_OFFSET_FORWARD = v } },
+  { name: 'Side', min: -40, max: 40, step: 1, value: BALL_OFFSET_SIDE, onChange: v => { BALL_OFFSET_SIDE = v } },
+  { name: 'Down', min: -40, max: 40, step: 1, value: BALL_OFFSET_DOWN, onChange: v => { BALL_OFFSET_DOWN = v } },
+])
+
+// "Copy config": serializza TUTTI i parametri regolabili da debug pronti
+// da incollare nel codice (manipolatore + dribble + pallone, non solo la
+// forma del robot come prima — stesso schema usato finora per hardcodare
+// scala/spawn camera)
+const copyConfigBtn = document.createElement('button')
+copyConfigBtn.id = 'copy-config-btn'
+copyConfigBtn.textContent = 'Copy config'
+const copyConfigFeedback = document.createElement('div')
+copyConfigFeedback.id = 'copy-config-feedback'
+debugPanel.append(copyConfigBtn, copyConfigFeedback)
+
 copyConfigBtn.addEventListener('click', async () => {
-  const c = manipulator.getConfig()
+  const c = {
+    ...manipulator.getConfig(),
+    ballRadius: BALL_RADIUS, ballGravity: BALL_GRAVITY, ballBounceSpeed: BALL_BOUNCE_SPEED,
+    armYawOffsetDeg: ARM_YAW_OFFSET_DEG, crosshairHeight: CROSSHAIR_HEIGHT,
+    dribblePushDuration: DRIBBLE_PUSH_DURATION, dribbleElbowAmplitudeDeg: DRIBBLE_ELBOW_AMPLITUDE_DEG,
+    dribbleLink1AmplitudeDeg: DRIBBLE_LINK1_AMPLITUDE_DEG, dribbleLockAbsorbTime: DRIBBLE_LOCK_ABSORB_TIME,
+    dribbleRiseYCorrection: DRIBBLE_RISE_Y_CORRECTION,
+    ballOffsetForward: BALL_OFFSET_FORWARD, ballOffsetSide: BALL_OFFSET_SIDE, ballOffsetDown: BALL_OFFSET_DOWN,
+  }
   const text = Object.entries(c).map(([k, v]) => `${k}: ${v}`).join('\n')
   try {
     await navigator.clipboard.writeText(text)
@@ -332,12 +459,27 @@ const cameraPanel = document.getElementById('camera-panel')
 // [elemento, funzione che legge il valore corrente] invece di 6 variabili
 // + 6 assegnazioni .textContent speculari nel loop
 const camReadouts = [
-  ['cam-x', () => camera.position.x],
-  ['cam-y', () => camera.position.y],
-  ['cam-z', () => camera.position.z],
-  ['cam-pitch', () => THREE.MathUtils.radToDeg(camera.rotation.x)],
-  ['cam-yaw', () => THREE.MathUtils.radToDeg(camera.rotation.y)],
-  ['cam-roll', () => THREE.MathUtils.radToDeg(camera.rotation.z)],
+  ['cam-x', () => camera.position.x.toFixed(1)],
+  ['cam-y', () => camera.position.y.toFixed(1)],
+  ['cam-z', () => camera.position.z.toFixed(1)],
+  ['cam-pitch', () => THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1)],
+  ['cam-yaw', () => THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1)],
+  ['cam-roll', () => THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1)],
+  // stato grezzo della macchina a stati del palleggio, per verificare a
+  // occhio SE è davvero questo a scattare in anticipo (non solo i numeri
+  // derivati sotto)
+  ['dribble-phase', () => dribblePhase],
+  ['dribble-arm-ease', () => dribbleArmEase.toFixed(3)],
+  ['ball-y', () => basketball ? basketball.position.y.toFixed(1) : '—'],
+  ['paddle-y', () => paddleWorldPos.y.toFixed(1)],
+  // "Gap (live)" è quasi sempre diverso da zero (palla e paletta seguono
+  // curve diverse per la maggior parte del ciclo, per design) — non è il
+  // numero utile. "Reconnect Gap" invece è lockOffset.y: congelato
+  // esattamente nell'istante del riaggancio, resta leggibile tra un ciclo
+  // e l'altro invece di sfarfallare — è QUESTO che deve tendere a 0
+  // tarando Bounce Speed/Gravity
+  ['ball-paddle-gap', () => basketball ? (basketball.position.y - paddleWorldPos.y).toFixed(1) : '—'],
+  ['reconnect-gap', () => lockOffset.y.toFixed(1)],
 ].map(([id, get]) => [document.getElementById(id), get])
 
 document.addEventListener('keydown', e => {
@@ -385,6 +527,11 @@ const CHASE_DISTANCE = 350
 const CHASE_HEIGHT = 180
 const LOOK_HEIGHT = 80
 const ORBIT_SENSITIVITY = 0.0025
+// il braccio (base R1) seguiva l'orbit yaw 1:1, quindi puntava sempre
+// esattamente lontano dalla camera (si vedeva il palleggio "di spalle").
+// ARM_YAW_OFFSET_DEG (dichiarata più sopra, tarabile da debug → Play Aim)
+// resta comunque agganciato all'orbit (gira insieme alla camera), ma
+// sfalsato di lato — così il palleggio si vede di profilo
 let orbitYaw = 0
 // pitch iniziale che riproduce l'inquadratura di prima (stessa proporzione
 // altezza/distanza), poi libero via mouse entro un range che non ribalta
@@ -409,6 +556,8 @@ function lerpAngle(current, target, factor) {
 // --- Dash (Shift in Play) ---
 const dashPanel = document.getElementById('dash-panel')
 const dashBarFill = document.getElementById('dash-bar-fill')
+const crosshair = document.getElementById('crosshair')
+crosshair.style.top = `calc(50% - ${CROSSHAIR_HEIGHT}px)`
 const dashDirection = new THREE.Vector3()
 const DASH_COOLDOWN_TIME = 4
 const DASH_DURATION = 0.15
@@ -428,6 +577,7 @@ document.addEventListener('keydown', e => {
   mode = mode === 'spectate' ? 'play' : 'spectate'
   modeIndicator.textContent = `MODE: ${mode.toUpperCase()}`
   dashPanel.classList.toggle('hidden', mode !== 'play')
+  crosshair.classList.toggle('hidden', mode !== 'play')
   // forza un nuovo click-per-entrare nel cambio modalità, per evitare
   // che un delta mouse residuo salti da uno schema di controllo all'altro
   if (controls.isLocked) controls.unlock()
@@ -443,8 +593,173 @@ document.addEventListener('mousemove', e => {
   )
 })
 
+// --- Palleggio (sempre attivo, non solo in Play) ---
+// macchina a stati sincronizzata col gomito (no libreria fisica/tween):
+// 'push'  → il gomito (+ link1, ampiezza minore) spinge la paletta verso
+//           il basso; la palla è "incollata" alla sua posizione mondo
+//           reale (X/Y/Z), non alla fisica libera
+// 'drop'  → il gomito resta fermo dov'è arrivato; la palla, rilasciata,
+//           continua a cadere da sola sotto gravità finché non tocca terra
+// 'rise'  → la palla rimbalza e risale sotto gravità (fisica pura + una
+//           piccola correzione costante in Y); il gomito (+ link1) risale
+//           in parallelo, sincronizzato sulla stessa durata balistica, per
+//           incontrarla di nuovo in cima e ricominciare con 'push'
+// In X/Z il pallone segue sempre la posizione mondo reale della paletta.
+// BALL_GRAVITY/BALL_BOUNCE_SPEED dichiarate più sopra (fisse); DRIBBLE_* regolabili da debug
+let ballVelocityY = 0
+// fisica balistica pura di 'rise', SEPARATA dalla Y renderizzata: se si
+// sottraesse DRIBBLE_RISE_Y_CORRECTION direttamente da basketball.position.y
+// ogni frame, il frame successivo ripartirebbe già "corretto" e la
+// sottrazione si accumulerebbe frame dopo frame invece di restare un
+// piccolo offset costante — qui invece resta lo stato fisico vero,
+// impostato al rimbalzo (vedi 'drop'), la correzione si applica solo in
+// fase di render (vedi 'rise')
+let riseBallisticY = 0
+let dribblePhase = 'push'
+let dribblePhaseT = 0
+// 0 = braccio a riposo (in cima), 1 = spinta al massimo — persiste anche
+// durante 'drop' (il braccio resta fermo dov'è arrivato), aggiornata solo
+// in 'push'/'rise'; guida anche la posa "aperta" della paletta sotto
+let dribbleArmEase = 0
+// offset palla↔paletta congelato nell'istante in cui la palla si "riaggancia"
+// (fine 'rise' → 'push'): il lock parte esattamente da lì (nessuno scatto),
+// poi si riassorbe verso 0 nel corso della spinta — vedi uso in animate()
+const lockOffset = new THREE.Vector3()
+// Y della PALETTA (non della palla) al frame precedente, solo durante
+// 'push': serve a dedurre la velocità reale che la spinta impartisce
+// (differenza finita), così 'drop' riparte da quella invece che da un
+// azzeramento secco. Deve essere la Y della paletta, non quella
+// (eventualmente ancora "sporcata" dal riassorbimento di lockOffset) della
+// palla — vedi uso in animate(). null = "appena entrati in push, nessuna
+// storia da cui dedurla"
+let previousPushPaddleY = null
+const paddleWorldPos = new THREE.Vector3()
+// assi locali della paletta trasformati in direzioni mondo ogni frame
+// (BALL_OFFSET_* dichiarate più sopra, tarabili da debug)
+const paddleForwardDir = new THREE.Vector3()
+const paddleSideDir = new THREE.Vector3()
+const paddleDownDir = new THREE.Vector3()
+
+// timestep fisso per la simulazione del palleggio, disaccoppiato dal
+// framerate di rendering (accumulator pattern): il render loop gira a
+// delta variabile (vsync/hitch/tab in background), ma updateDribble vede
+// SEMPRE lo stesso dt piccolo e costante. Questo è ciò che rende la
+// traiettoria riproducibile (stesse condizioni iniziali → stessa curva,
+// indipendentemente da quanto è fluido il framerate quella volta) ed
+// elimina alla radice — non solo attutisce — il caso patologico di un
+// singolo frame con delta enorme che capita esattamente sul frame in cui
+// dribbleArmEase satura a 1: qui quel frame verrebbe semplicemente diviso
+// in più passi da DRIBBLE_FIXED_DT, mai in un passo unico anomalo
+const DRIBBLE_FIXED_DT = 1 / 120
+let dribbleAccumulator = 0
+
 // --- Loop ---
 const clock = new THREE.Clock()
+
+// Palleggio: unica funzione chiamata a passo fisso (vedi accumulator in
+// animate()). dt è sempre DRIBBLE_FIXED_DT, mai il delta di rendering.
+function updateDribble(dt) {
+  dribblePhaseT += dt
+  const elbowAmplitude = THREE.MathUtils.degToRad(DRIBBLE_ELBOW_AMPLITUDE_DEG)
+  const link1Amplitude = THREE.MathUtils.degToRad(DRIBBLE_LINK1_AMPLITUDE_DEG)
+  // dribbleArmEase aggiornata solo in 'push'/'rise' — in 'drop' resta
+  // quella di fine 'push' (il braccio è fermo in fondo, non tocca nulla)
+  if (dribblePhase === 'push') {
+    const t = Math.min(dribblePhaseT / DRIBBLE_PUSH_DURATION, 1)
+    dribbleArmEase = t * t // ease-IN: velocità massima (non zero) proprio al rilascio, sempre da 0 (pose pulita, niente scatto residuo)
+  } else if (dribblePhase === 'rise') {
+    const riseDuration = BALL_BOUNCE_SPEED / BALL_GRAVITY // tempo per decelerare a v=0 sotto gravità
+    const t = Math.min(dribblePhaseT / riseDuration, 1)
+    dribbleArmEase = 1 - t * t * (3 - 2 * t) // da 1 a 0: il braccio torna su mentre la palla risale
+  }
+  // applicata PRIMA di leggere la world position della paletta, altrimenti
+  // sarebbe in ritardo di un frame rispetto alla posa appena decisa sopra
+  manipulator.controls.setDribbleElbow(dribbleArmEase * elbowAmplitude)
+  manipulator.controls.setDribbleLink1(dribbleArmEase * link1Amplitude)
+
+  // updateWorldMatrix forza il ricalcolo subito (matrixWorld si aggiorna
+  // di norma solo durante il render, quindi senza sarebbe in ritardo di
+  // un frame rispetto alla posa appena applicata sopra)
+  manipulator.paddle.updateWorldMatrix(true, false)
+  manipulator.paddle.getWorldPosition(paddleWorldPos)
+  // il punto di tracking (centro geometrico della paletta) non è dove
+  // dovrebbe stare la palla a occhio: 3 offset (Forward/Side/Down,
+  // tarabili da debug → Basketball → Ball Offset) spostano quel punto.
+  // NON relativi alla rotazione dell'end effector (gomito/link1/polso/
+  // tilt): con Forward=40 e il gomito che spazza 40° durante il push,
+  // un offset che ruotasse CON quella pitch disegnerebbe un arco da 40
+  // unità di raggio, staccando visibilmente la palla dalla paletta —
+  // solo lo yaw della base (dove punta il braccio orizzontalmente) è
+  // rilevante, Down è sempre il basso reale del mondo
+  angleToForward(manipulator.joints.base.rotation.y, paddleForwardDir)
+  rotateRight(paddleForwardDir, paddleSideDir)
+  paddleDownDir.set(0, -1, 0)
+  paddleWorldPos
+    .addScaledVector(paddleForwardDir, BALL_OFFSET_FORWARD)
+    .addScaledVector(paddleSideDir, BALL_OFFSET_SIDE)
+    .addScaledVector(paddleDownDir, BALL_OFFSET_DOWN)
+
+  if (dribblePhase === 'push') {
+    // lockOffset si riassorbe in DRIBBLE_LOCK_ABSORB_TIME (breve, non
+    // sull'intera spinta): al frame del "riaggancio" la palla resta
+    // esattamente dov'era (nessuno scatto), poi converge in fretta sulla
+    // paletta — per il resto della spinta la segue esattamente, offset zero
+    const lockBlend = Math.min(dribblePhaseT / DRIBBLE_LOCK_ABSORB_TIME, 1)
+    basketball.position.copy(paddleWorldPos).addScaledVector(lockOffset, 1 - lockBlend)
+    // velocità dedotta dal movimento REALE della paletta (paddleWorldPos),
+    // non da basketball.position: quella include anche il riassorbimento
+    // di lockOffset, che con Lock Absorb Time pari all'intera Push
+    // Duration contribuisce un termine costante alla velocità per tutta
+    // la spinta — compreso l'ultimo passo, quello del rilascio. lockOffset
+    // varia leggermente da ciclo a ciclo, quindi ogni tanto quel termine
+    // annullava quasi del tutto la velocità vera della paletta proprio al
+    // rilascio, dando l'impressione di un azzeramento/rallentamento a inizio 'drop'.
+    // Con dt fisso questa lettura per-passo è stabile: non c'è più un delta
+    // variabile/anomalo che possa farla collassare vicino a zero
+    if (previousPushPaddleY !== null) ballVelocityY = (paddleWorldPos.y - previousPushPaddleY) / dt
+    previousPushPaddleY = paddleWorldPos.y
+    // tolleranza, non ">= 1" stretto: dribblePhaseT accumula dt (1/120, non
+    // rappresentabile esattamente in binario) per ~30 passi, quindi arriva
+    // a un pelo SOTTO 0.25 invece che esattamente uguale — dribbleArmEase
+    // tocca 0.999999999999998 invece di 1, e senza tolleranza serve un
+    // passo fisso intero "sprecato" in più prima che la transizione scatti
+    // davvero. In quel passo la paletta è già a fine corsa e non si muove
+    // per niente (Δy = 0 esatto) → l'ultima ballVelocityY calcolata è
+    // sempre zero, ad ogni singolo ciclo (deterministico, non casuale)
+    if (dribbleArmEase >= 1 - 1e-6) { dribblePhase = 'drop'; dribblePhaseT = 0 }
+  } else if (dribblePhase === 'drop') {
+    ballVelocityY -= BALL_GRAVITY * dt
+    let ballY = basketball.position.y + ballVelocityY * dt
+    if (ballY <= BALL_RADIUS) {
+      ballY = BALL_RADIUS
+      ballVelocityY = BALL_BOUNCE_SPEED
+      riseBallisticY = ballY // stato fisico vero di 'rise', riparte dal punto di rimbalzo
+      dribblePhase = 'rise'
+      dribblePhaseT = 0
+    }
+    basketball.position.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
+  } else { // 'rise'
+    ballVelocityY -= BALL_GRAVITY * dt
+    // riseBallisticY integra la fisica pura, MAI la Y già corretta (che
+    // altrimenti si accumulerebbe frame dopo frame) — la correzione è
+    // un piccolo offset costante applicato solo qui, in fase di render
+    riseBallisticY += ballVelocityY * dt
+    const ballY = riseBallisticY - DRIBBLE_RISE_Y_CORRECTION
+    basketball.position.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
+    // riaggancio al vero apice balistico (v=0): il riaggancio esattamente
+    // lì, non prima, è ciò che minimizza lo scatto (sia la velocità della
+    // palla sia il ritorno del braccio sono più piatti in quel punto)
+    if (dribbleArmEase <= 0 || ballVelocityY <= 0) {
+      // congela l'offset palla↔paletta nell'istante esatto del riaggancio,
+      // così 'push' riparte dalla posizione reale della palla, non da uno
+      // scatto verso la paletta
+      lockOffset.copy(basketball.position).sub(paddleWorldPos)
+      previousPushPaddleY = null // nessuna storia di velocità pregressa per il nuovo 'push'
+      dribblePhase = 'push'
+      dribblePhaseT = 0
+    }
+  }
+}
 
 function animate() {
   requestAnimationFrame(animate)
@@ -469,7 +784,7 @@ function animate() {
     // orbitYaw=0 la base è a riposo (nessuna rotazione extra) e il
     // braccio punta già "in avanti" di default. Indipendente dal
     // movimento: si mira col mouse, ci si muove con WASD
-    manipulator.controls.setAimYaw(orbitYaw)
+    manipulator.controls.setAimYaw(orbitYaw + THREE.MathUtils.degToRad(ARM_YAW_OFFSET_DEG))
     // guardare su/giù (orbitPitch) alza/abbassa di poco l'end effector,
     // ruotando il gomito e non l'ultimo link — coupling piccolo apposta.
     // setAimPitch gestisce internamente anche il rilivellamento della
@@ -526,8 +841,22 @@ function animate() {
     camera.lookAt(robotPos.x, robotPos.y + LOOK_HEIGHT, robotPos.z)
   }
 
+  if (basketball) {
+    // consuma il tempo reale a fette fisse (vedi commento su DRIBBLE_FIXED_DT):
+    // un frame lento produce più iterazioni consecutive, uno veloce anche
+    // zero (il resto resta in accumulator per il prossimo) — updateDribble
+    // non vede mai altro dt che non sia questo valore costante. Clamp per
+    // evitare una "spirale della morte" (troppe iterazioni da recuperare)
+    // se il tab perde focus a lungo
+    dribbleAccumulator = Math.min(dribbleAccumulator + delta, DRIBBLE_FIXED_DT * 10)
+    while (dribbleAccumulator >= DRIBBLE_FIXED_DT) {
+      updateDribble(DRIBBLE_FIXED_DT)
+      dribbleAccumulator -= DRIBBLE_FIXED_DT
+    }
+  }
+
   if (!cameraPanel.classList.contains('hidden')) {
-    camReadouts.forEach(([el, get]) => { el.textContent = get().toFixed(1) })
+    camReadouts.forEach(([el, get]) => { el.textContent = get() })
   }
 
   composer.render()

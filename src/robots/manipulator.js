@@ -36,6 +36,8 @@ export function createManipulatorRobot() {
     baseJointScale: 1,
     elbowJointScale: 0.75,
     endEffectorScale: 0.25,
+    paddleAngle: 2.4, // apertura totale della V tra le due palette (rad) — baseline molto aperta, coincide con l'estremo dello slider (PADDLE_ANGLE_MAX in main.js)
+    paddleTilt: 1.2,  // inclinazione extra della paletta (oltre al livellamento auto), verso il basso — baseline all'estremo dello slider (PADDLE_TILT_MAX in main.js)
   }
   const INITIAL_DISC_RADIUS = state.discRadius
 
@@ -104,8 +106,17 @@ export function createManipulatorRobot() {
     return geo
   }
 
+  // link1Group: giunto di "spalla" in più oltre al 3R nominale (che resta
+  // base→link1→gomito→link2→polso). Serve solo a dare a link1 una leggera
+  // inclinazione secondaria durante il palleggio (setDribbleLink1). Gomito
+  // (e tutto ciò che segue) è agganciato QUI SOTTO, non a `base` come
+  // prima: così segue la rotazione di link1Group invece di restare
+  // indietro e scollegarsi visivamente quando link1 si inclina
+  const link1Group = new THREE.Group()
+  base.add(link1Group)
+
   const link1 = new THREE.Mesh(makeLinkGeometry(state.link1Length, state.link1Thickness), armMat)
-  base.add(link1)
+  link1Group.add(link1)
 
   // R2: gomito, pitch attorno a X, all'estremità del link1
   // rest pose: braccio piegato in avanti così sporge oltre il disco
@@ -113,7 +124,7 @@ export function createManipulatorRobot() {
   const elbow = new THREE.Group()
   elbow.position.y = state.link1Length
   elbow.rotation.x = ELBOW_REST_PITCH
-  base.add(elbow)
+  link1Group.add(elbow)
 
   const elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius * 0.85, 16, 16), armMat)
   elbow.add(elbowJoint)
@@ -135,22 +146,77 @@ export function createManipulatorRobot() {
   const endEffector = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), accentMat)
   wrist.add(endEffector)
 
+  // Paletta a "V rovesciata": due palette gemelle che condividono lo stesso
+  // bordo di aggancio (quello sull'end effector) invece di un'unica paletta
+  // piatta. paddleGroup fa da perno comune (leveling, vedi sotto); ogni
+  // paddleLeft/Right è ruotata di ±metà apertura ATTORNO A QUEL BORDO,
+  // quindi vista di taglio lungo il bordo (il "-" piatto di prima) le due
+  // metà divergono a V invece di restare allineate.
   const paddleWidth = 0.35 // lato corto (Z)
   const paddleGeo = new THREE.BoxGeometry(0.5, 0.05, paddleWidth)
   // sposta il pivot dal centro della paletta al centro del lato lungo
   // (bordo Z), così la sfera end-effector risulta attaccata lì, non al
   // centro della paletta — segno positivo: la paletta si estende verso
-  // l'esterno del braccio, non verso il corpo del robot
+  // l'esterno del braccio, non verso il corpo del robot. Geometria
+  // condivisa fra le due metà: stessa forma, non serve duplicarla
   paddleGeo.translate(0, 0, paddleWidth / 2)
-  const paddle = new THREE.Mesh(paddleGeo, accentMat)
-  // gomito e polso ruotano sullo stesso asse (X) quindi i pitch si
-  // sommano: senza contro-rotazione la paletta erediterebbe l'inclinazione
-  // netta del braccio invece di restare piatta/orizzontale, pronta a
-  // palleggiare
-  paddle.rotation.x = -(ELBOW_REST_PITCH + WRIST_REST_PITCH)
-  // nessun offset di posizione: il pivot (ora sul bordo lungo) coincide
-  // con l'end effector, così la sfera è connessa lì
-  wrist.add(paddle)
+
+  const paddleGroup = new THREE.Group()
+  wrist.add(paddleGroup)
+  const paddleLeft = new THREE.Mesh(paddleGeo, accentMat)
+  const paddleRight = new THREE.Mesh(paddleGeo, accentMat)
+  paddleGroup.add(paddleLeft, paddleRight)
+
+  // punto di riferimento per il tracking esterno (es. la palla in main.js):
+  // al centro reale della paletta (sulla bisettrice, a metà tra le due
+  // metà), non sul bordo di aggancio/giunto — un Object3D invisibile,
+  // figlio di paddleGroup (non delle singole metà: sta sulla bisettrice,
+  // non eredita l'apertura a V di una sola delle due)
+  const paddleCenter = new THREE.Object3D()
+  paddleGroup.add(paddleCenter)
+  // ATTENZIONE: paddleWidth/2 sarebbe la Z solo a paddleAngle=0 (palette
+  // piatte). Ogni metà è ruotata di ±paddleAngle/2 attorno al bordo comune
+  // (Z=0): il suo punto medio (Z=paddleWidth/2 nel proprio frame non
+  // ruotato) si sposta a Z=(paddleWidth/2)·cos(paddleAngle/2) una volta
+  // ruotato — più la V si apre, più il centro reale si "ripiega" verso il
+  // bordo invece di restare alla distanza nominale. Senza questo, con
+  // paddleAngle vicino al massimo il punto di tracking finiva ben oltre la
+  // superficie vera della paletta (palla "staccata")
+  function updatePaddleCenter() {
+    paddleCenter.position.set(0, 0, (paddleWidth / 2) * Math.cos(state.paddleAngle / 2))
+  }
+  updatePaddleCenter()
+
+  // link1Group/gomito/polso ruotano tutti sullo stesso asse (X) quindi i
+  // pitch si sommano (le rotazioni attorno allo stesso asse locale, in una
+  // catena padre-figlio senza yaw intermedio, si sommano linearmente):
+  // senza contro-rotazione la paletta erediterebbe l'inclinazione netta
+  // del braccio invece di restare piatta/orizzontale, pronta a palleggiare.
+  // Livella il gruppo intero (perno comune); paddleTilt è un'inclinazione
+  // EXTRA voluta sopra il livellamento (per orientare la paletta verso il
+  // basso), l'apertura a V delle due metà è un'ulteriore rotazione LOCALE
+  // sopra tutto questo — resta valida indipendentemente da come punta il braccio
+  function levelPaddle() {
+    paddleGroup.rotation.x = -(link1Group.rotation.x + elbow.rotation.x + WRIST_REST_PITCH) + state.paddleTilt
+  }
+  function applyPaddleAngle() {
+    paddleLeft.rotation.x = state.paddleAngle / 2
+    paddleRight.rotation.x = -state.paddleAngle / 2
+  }
+
+  // Il pitch del gomito arriva da due sorgenti indipendenti che si sommano
+  // (mira camera in Play + palleggio automatico, sempre attivo): tenute
+  // separate invece di un valore unico così le due animazioni non si
+  // sovrascrivono a vicenda quando entrambe attive
+  let aimPitchOffset = 0
+  let dribbleElbowOffset = 0
+  function applyArmPitch() {
+    elbow.rotation.x = ELBOW_REST_PITCH + aimPitchOffset + dribbleElbowOffset
+    levelPaddle()
+  }
+
+  levelPaddle()
+  applyPaddleAngle()
 
   // combina scala manuale ruote × rapporto raggio disco/iniziale, così le
   // ruote seguono automaticamente l'espansione/contrazione del disco
@@ -256,8 +322,30 @@ export function createManipulatorRobot() {
     // stesso asse si sommano, la paletta va rilivellata di conseguenza)
     // resta qui, invece che duplicata anche in main.js
     setAimPitch(pitchOffset) {
-      elbow.rotation.x = ELBOW_REST_PITCH + pitchOffset
-      paddle.rotation.x = -(elbow.rotation.x + WRIST_REST_PITCH)
+      aimPitchOffset = pitchOffset
+      applyArmPitch()
+    },
+    // palleggio automatico (sempre attivo, non solo Play): offset di pitch
+    // sul gomito, si somma a setAimPitch invece di sostituirlo
+    setDribbleElbow(offset) {
+      dribbleElbowOffset = offset
+      applyArmPitch()
+    },
+    // stessa sorgente di offset del gomito (proporzionale, ampiezza minore
+    // decisa da chi chiama in main.js): link1Group porta con sé gomito e
+    // tutto il resto della catena, quindi "si piega" invece di scollegarsi
+    setDribbleLink1(offset) {
+      link1Group.rotation.x = offset
+      levelPaddle()
+    },
+    paddleAngle(a) {
+      state.paddleAngle = a
+      applyPaddleAngle()
+      updatePaddleCenter()
+    },
+    paddleTilt(angle) {
+      state.paddleTilt = angle
+      levelPaddle()
     },
     setWheelsYaw(angle) {
       wheelsGroup.rotation.y = angle
@@ -286,7 +374,11 @@ export function createManipulatorRobot() {
     link2,
     joints: { base, elbow, wrist },
     endEffector,
-    paddle,
+    // paddleCenter (non paddleGroup): il punto di tracking esterno deve
+    // essere al centro della paletta, non sul giunto di aggancio
+    paddle: paddleCenter,
+    paddleLeft,
+    paddleRight,
     controls,
     getConfig,
   }
