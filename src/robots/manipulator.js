@@ -277,16 +277,24 @@ export function createManipulatorRobot() {
   // non eredita l'apertura a V di una sola delle due)
   const paddleCenter = new THREE.Object3D()
   paddleGroup.add(paddleCenter)
-  // ATTENZIONE: paddleWidth/2 sarebbe la Z solo a paddleAngle=0 (palette
-  // piatte). Ogni metà è ruotata di ±paddleAngle/2 attorno al bordo comune
+  // offset di chiusura extra sopra paddleAngle (che resta "forma", tracciata
+  // in state e nel Copy Config) — usato dalla presa HANDLING in main.js per
+  // stringere la V senza toccare la configurazione salvata, stesso principio
+  // di aimPitchOffset/dribbleElbowOffset qui sotto
+  let gripOffset = 0
+  function effectivePaddleAngle() {
+    return Math.max(state.paddleAngle - gripOffset, 0)
+  }
+  // ATTENZIONE: paddleWidth/2 sarebbe la Z solo ad angolo=0 (palette
+  // piatte). Ogni metà è ruotata di ±angolo/2 attorno al bordo comune
   // (Z=0): il suo punto medio (Z=paddleWidth/2 nel proprio frame non
-  // ruotato) si sposta a Z=(paddleWidth/2)·cos(paddleAngle/2) una volta
+  // ruotato) si sposta a Z=(paddleWidth/2)·cos(angolo/2) una volta
   // ruotato — più la V si apre, più il centro reale si "ripiega" verso il
   // bordo invece di restare alla distanza nominale. Senza questo, con
-  // paddleAngle vicino al massimo il punto di tracking finiva ben oltre la
+  // angolo vicino al massimo il punto di tracking finiva ben oltre la
   // superficie vera della paletta (palla "staccata")
   function updatePaddleCenter() {
-    paddleCenter.position.set(0, 0, (paddleWidth / 2) * Math.cos(state.paddleAngle / 2))
+    paddleCenter.position.set(0, 0, (paddleWidth / 2) * Math.cos(effectivePaddleAngle() / 2))
   }
   updatePaddleCenter()
 
@@ -303,8 +311,10 @@ export function createManipulatorRobot() {
     paddleGroup.rotation.x = -(link1Group.rotation.x + elbow.rotation.x + WRIST_REST_PITCH) + state.paddleTilt
   }
   function applyPaddleAngle() {
-    paddleLeft.rotation.x = state.paddleAngle / 2
-    paddleRight.rotation.x = -state.paddleAngle / 2
+    const angle = effectivePaddleAngle()
+    paddleLeft.rotation.x = angle / 2
+    paddleRight.rotation.x = -angle / 2
+    updatePaddleCenter()
   }
 
   // Il pitch del gomito arriva da due sorgenti indipendenti che si sommano
@@ -440,6 +450,12 @@ export function createManipulatorRobot() {
       dribbleElbowOffset = elbowOffset
       link1Group.rotation.x = link1Offset
       applyArmPitch()
+    },
+    // presa HANDLING (main.js): stringe la V della paletta senza toccare
+    // paddleAngle/state — offset (rad) sottratto dall'apertura configurata
+    setGrip(offset) {
+      gripOffset = offset
+      applyPaddleAngle()
     },
     paddleAngle(a) {
       state.paddleAngle = a

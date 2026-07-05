@@ -40,7 +40,7 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td><b>4 — Basic Playable Robot</b></td><td>MANIPULATOR: modello gerarchico procedurale, debug menu, movimento/sterzata/mira/dash in Play mode. Solo questa classe — altre 3 da fare</td></tr>
 <tr><td>✅</td><td><b>5 — Basic Basketball</b></td><td>Pallone GLTF dedicato (color + normal + metallic/roughness map) e palleggio animato: macchina a stati push/drop/rise a timestep fisso, sincronizzata con la cinematica del braccio</td></tr>
 <tr><td>⬜</td><td><b>6 — Primo Polishing & Riallineamento</b></td><td>Rifinitura complessiva, riallineamento al piano</td></tr>
-<tr><td>⬜</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche, pick-up/dribble a bottone, Shooting System con HUD forza, verifica collisioni su dribble, Point System</td></tr>
+<tr><td>⬜</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche ✅, pick-up/handling a bottone ✅, Shooting System con HUD forza, verifica collisioni su dribble, Point System</td></tr>
 <tr><td>⬜</td><td><b>Section 3 — Enemies & Polish</b></td><td>Enemies 3v3 con AI, Steal/Block, personalizzazione menu, animation tweaks, rework Main Menu/HUD, secondo polishing e allineamento con esame</td></tr>
 <tr><td>⬜</td><td><b>Section 4 — Nuove Classi & Game Modes</b></td><td>Classe Drone (mossa "Uplifting"), Classe Legged Manipulator (mossa "Jump"), selettore Sunrise/Day/Sunset/Night, altre impostazioni globali, modalità di gioco (3v3 normale, beat the time, beat the score), polish finale</td></tr>
 <tr><td>⬜</td><td><b>Section 5 — Revisione Finale</b></td><td>Revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
@@ -93,9 +93,9 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td>Texture di almeno due tipi diversi (pallone: color + normal + metallic/roughness map; campo: solo color map)</td></tr>
 <tr><td>⬜</td><td>Selezione robot da schermata iniziale</td></tr>
 <tr><td>⬜</td><td>Perf: <code>light.shadow.autoUpdate = false</code> su sole e lampioni — le shadow map di campo/lampioni (statici) vengono ricalcolate ogni frame inutilmente (1 map 4096² + 4×6 map 512²); vanno congelate e aggiornate solo quando la scena statica cambia, ora che il robot mobile aggiunge ombre dinamiche vere</td></tr>
-<tr><td>⬜</td><td>Section 2: stabilire le classi e le loro statistiche (valori concreti per MANIPULATOR/COLOSSUS/GLITCH/SENTINEL)</td></tr>
-<tr><td>⬜</td><td>Section 2: Pick-up the ball / Dribble ball come azione a bottone, invece del palleggio sempre attivo automatico</td></tr>
-<tr><td>⬜</td><td>Section 2: fixare le interazioni tra le animazioni di pick-up e dribble</td></tr>
+<tr><td>✅</td><td>Section 2: stabilire le classi e le loro statistiche — roster corretto (MANIPULATOR/LEGGED MANIPULATOR/DRONE, non più COLOSSUS/GLITCH/SENTINEL), stats struct omogeneo <code>{ speed, power }</code> via <code>RobotBase</code>/<code>ManipulatorRobot</code> (<code>src/robots/</code>)</td></tr>
+<tr><td>✅</td><td>Section 2: Pick-up/Handling della palla come azione a bottone (tasto destro tenuto premuto, <code>RobotState.HANDLING</code>) invece del palleggio sempre attivo automatico</td></tr>
+<tr><td>✅</td><td>Section 2: interazioni tra le animazioni di dribble/handling — transizioni interpolate in entrambe le direzioni (posa braccio, presa paletta, camera posizione+rotazione)</td></tr>
 <tr><td>⬜</td><td>Section 2: Shooting System — tiro al canestro con HUD per la forza, dipendente dalle stat</td></tr>
 <tr><td>⬜</td><td>Section 2: verificare se le collisioni vanno applicate anche al dribble</td></tr>
 <tr><td>⬜</td><td>Section 2: Point System, overlay HUD e/o texture fisiche in scena</td></tr>
@@ -266,6 +266,19 @@ Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo 
 4. **Pseudo-elementi `::before`/`::after`** per dettagli decorativi (linee accento con `box-shadow` colorato tipo neon, angoli con bordini) senza sporcare l'HTML.
 5. **Variabili CSS** (`--ui-red`, `--ui-gold`, `--ui-panel`, ecc.) per un sistema colore coerente in tutta l'interfaccia.
 6. **`@keyframes` per l'ingresso dei pannelli** (es. `panel-arrival`) invece di comparire di scatto.
+
+### Class JS vs Factory Function (architettura RobotBase)
+
+Con l'arrivo delle stat multi-classe (Section 2) ci si è chiesti se passare da factory function (pattern usato ovunque finora, vedi `createManipulatorRobot()`) a `class` JS vere per rappresentare le classi robot. Confronto:
+
+| | Class JS | Factory Function |
+|---|---|---|
+| Pro | Ereditarietà nativa (`extends`/`super`), `instanceof`, metodi condivisi sul prototype | Incapsulamento vero via closure, zero bug di binding `this`, composizione più flessibile della catena rigida |
+| Contro | Footgun del `this` nei callback, incapsulamento non automatico (serve `#private`), cambio di stile a metà progetto | Nessuna condivisione di metodi tra istanze (irrilevante con pochi robot in campo), niente `instanceof` nativo |
+
+**6 dei 7 repo scandagliati usano factory function anche per oggetti con più varianti** (solo `404nation` ha una `class SnakeSegment`) — nessuno ha però un sistema di classi-personaggio selezionabili con stat come il nostro, quindi non c'è un precedente diretto per questa domanda specifica.
+
+**Scelta**: composizione, non sostituzione. `RobotBase` (`src/robots/RobotBase.js`) è una `class` vera che **compone** una factory function passata al costruttore (`Object.assign(this, factory())`), invece di riscrivere `manipulator.js` a `class`. Risultato: `manipulator.js` resta intatto (zero rischio), e si guadagnano comunque `instanceof`, stat/tipo/`specialMove()` come proprietà naturali della classe, ereditarietà per il comportamento condiviso (`move()`, il getter `speed`) — il meglio dei due mondi senza dover scegliere in modo netto.
 
 ---
 

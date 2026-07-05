@@ -6,7 +6,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
-import { createManipulatorRobot } from './robots/manipulator.js'
+import { ManipulatorRobot } from './robots/ManipulatorRobot.js'
+import { RobotState } from './robots/RobotBase.js'
 
 // --- Renderer ---
 // antialias:true qui non ha effetto: il rendering passa da EffectComposer
@@ -240,6 +241,21 @@ let CROSSHAIR_HEIGHT = 115
 let DRIBBLE_PUSH_DURATION = 0.25
 let DRIBBLE_ELBOW_AMPLITUDE_DEG = 40
 let DRIBBLE_LINK1_AMPLITUDE_DEG = 10
+// RobotState.HANDLING (tasto destro tenuto premuto): dichiarate qui (non
+// vicino a updateHandling più in basso) perché usate come valore iniziale
+// dello slider debug "Handling" costruito subito dopo questo blocco —
+// prima di questo spostamento erano `let` più in basso nel file e lo
+// slider le leggeva prima della dichiarazione (temporal dead zone,
+// ReferenceError che crashava l'intero modulo prima di arrivare ad animate())
+let HANDLING_EASE = -0.3 // quanto è "chiuso" il braccio nella presa (negativo=sopra il riposo/più in alto, 0=riposo, 1=fondo corsa push)
+let HANDLING_GRIP_OFFSET = 0.5 // quanto si stringe la V della paletta (rad, sottratto da paddleAngle)
+let HANDLING_TRANSITION_SPEED = 12 // rad/s-equivalente: interpolazione rapida ma non istantanea
+// più vicino = visuale più bassa/schiacciata: un rialzo extra in quota
+// compensa, per non vedere la base ma il braccio (utile per mirare/tirare)
+let HANDLING_HEIGHT_BOOST = 80
+// scarto laterale della camera in HANDLING (asse camRightFlat), per una
+// vista "di spalla" invece che dritta dietro il robot
+let HANDLING_CAMERA_SIDE_OFFSET = -60
 // quanto ci mette lockOffset (vedi sotto) a riassorbirsi a inizio 'push':
 // finestra breve rispetto a DRIBBLE_PUSH_DURATION, così per il resto della
 // spinta (mentre il link si piega, visibilmente) la palla è già a offset
@@ -263,7 +279,7 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
 })
 
 // --- Robot (Step 4: solo modello statico, no animazione/movimento ancora) ---
-const manipulator = createManipulatorRobot()
+const manipulator = new ManipulatorRobot()
 // unità locali (~1-4) → scala mondo: lampioni a Y=268, hoop reg. ~305cm,
 // unità mondo ≈ 1cm → tarato a 45 dopo test visivi via slider debug (P).
 // Passa da controls.manipulatorScale (non root.scale diretto) così lo
@@ -400,6 +416,13 @@ addComponentSection(manipulatorAnimation, 'Dribble', [
 ])
 // placeholder: nessuna animazione di tiro implementata ancora
 createToggleSection(manipulatorAnimation, 'Shoot')
+addComponentSection(manipulatorAnimation, 'Handling (tasto destro)', [
+  { name: 'Arm Ease', min: -1, max: 1, step: 0.02, value: HANDLING_EASE, onChange: v => { HANDLING_EASE = v } },
+  { name: 'Grip Angle (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: HANDLING_GRIP_OFFSET, onChange: v => { HANDLING_GRIP_OFFSET = v } },
+  { name: 'Transition Speed', min: 1, max: 30, step: 1, value: HANDLING_TRANSITION_SPEED, onChange: v => { HANDLING_TRANSITION_SPEED = v } },
+  { name: 'Camera Height Boost', min: 0, max: 300, step: 5, value: HANDLING_HEIGHT_BOOST, onChange: v => { HANDLING_HEIGHT_BOOST = v } },
+  { name: 'Camera Side Offset', min: -150, max: 150, step: 5, value: HANDLING_CAMERA_SIDE_OFFSET, onChange: v => { HANDLING_CAMERA_SIDE_OFFSET = v } },
+])
 addComponentSection(manipulatorAnimation, 'Play Aim', [
   { name: 'Arm Yaw Offset (deg)', min: -180, max: 180, step: 1, value: ARM_YAW_OFFSET_DEG, onChange: v => { ARM_YAW_OFFSET_DEG = v } },
   {
@@ -442,6 +465,8 @@ copyConfigBtn.addEventListener('click', async () => {
     dribblePushDuration: DRIBBLE_PUSH_DURATION, dribbleElbowAmplitudeDeg: DRIBBLE_ELBOW_AMPLITUDE_DEG,
     dribbleLink1AmplitudeDeg: DRIBBLE_LINK1_AMPLITUDE_DEG, dribbleLockAbsorbTime: DRIBBLE_LOCK_ABSORB_TIME,
     dribbleRiseYCorrection: DRIBBLE_RISE_Y_CORRECTION,
+    handlingEase: HANDLING_EASE, handlingGripOffset: HANDLING_GRIP_OFFSET, handlingTransitionSpeed: HANDLING_TRANSITION_SPEED,
+    handlingHeightBoost: HANDLING_HEIGHT_BOOST, handlingCameraSideOffset: HANDLING_CAMERA_SIDE_OFFSET,
     ballOffsetForward: BALL_OFFSET_FORWARD, ballOffsetSide: BALL_OFFSET_SIDE, ballOffsetDown: BALL_OFFSET_DOWN,
   }
   const text = Object.entries(c).map(([k, v]) => `${k}: ${v}`).join('\n')
@@ -522,8 +547,52 @@ let robotFacing = 0 // yaw ruote/robot (rad), persiste quando fermo
 const moveVec = new THREE.Vector3()
 const camForward = new THREE.Vector3()
 const camRightFlat = new THREE.Vector3()
-const ROBOT_SPEED = 200
+const targetCameraPos = new THREE.Vector3()
+// scratch per il quaternione bersaglio della rotazione camera (vedi uso più
+// sotto): riusati ogni frame invece di allocare oggetti nuovi nel loop
+const targetCameraQuat = new THREE.Quaternion()
+const scratchLookAtMatrix = new THREE.Matrix4()
+const scratchLookAtTarget = new THREE.Vector3()
+const scratchEuler = new THREE.Euler()
+// niente più costante fissa: la velocità viene da manipulator.speed (stat
+// SPEED della classe, vedi RobotBase.js)
 const CHASE_DISTANCE = 350
+// tasto destro tenuto premuto (Play mode): la camera si avvicina mentre il
+// braccio afferra la palla (vedi RobotState.HANDLING) — stessa orbita, solo
+// raggio più corto, interpolato con lo stesso schema esponenziale della
+// sterzata ruote invece di scattare di colpo
+const HANDLING_CHASE_DISTANCE = 150
+// HANDLING_HEIGHT_BOOST dichiarata più in alto (vedi vicino a HANDLING_EASE)
+// perché usata come valore iniziale dello slider debug "Handling", costruito
+// prima di questo punto nel file (stessa ragione della nota lì sopra)
+const CHASE_DISTANCE_LERP_SPEED = 6
+// più lenta della CHASE_DISTANCE_LERP_SPEED condivisa (usata da quota/pitch):
+// a 6 lo zoom si assestava così in fretta (~167ms) da sembrare uno scatto
+// istantaneo — qui si vede scorrere davvero
+const CHASE_DISTANCE_ZOOM_LERP_SPEED = 2.5
+// stesso discorso per il pitch in HANDLING: a velocità 6 (condivisa con la
+// quota) si assestava troppo in fretta, sembrando uno switch di colpo
+// specialmente contro il tetto ORBIT_PITCH_MAX_HANDLING più stretto
+const HANDLING_PITCH_LERP_SPEED = 3
+// DRIBBLE e HANDLING usano formule di posizione camera DIVERSE (orbita+lookAt
+// vs orientamento libero) — anche con parametri smussati, passare dall'una
+// all'altra è discontinuo (la formula stessa cambia da un frame al prossimo,
+// non solo i numeri dentro). Si interpola la POSIZIONE VERA della camera
+// verso il bersaglio calcolato ogni frame, non solo i parametri che lo
+// alimentano — così lo scatto sparisce indipendentemente da quale formula è
+// in uso
+const CAMERA_POSITION_LERP_SPEED = 10
+let currentChaseDistance = CHASE_DISTANCE
+let currentHeightBoost = 0
+// pitch REALMENTE applicato alla rotazione camera in HANDLING, interpolato
+// verso orbitPitch invece di scattarci sopra — impostato al valore giusto
+// al momento dell'ingresso in HANDLING (vedi mousedown), 0 qui è solo un
+// placeholder mai visto a schermo
+let currentHandlingPitch = 0
+// in HANDLING niente offset laterale: il braccio va in linea con la
+// visuale invece che di profilo, interpolato come il resto (vedi
+// ARM_YAW_OFFSET_DEG sopra per l'offset normale fuori da HANDLING)
+let currentArmYawOffsetDeg = ARM_YAW_OFFSET_DEG
 const CHASE_HEIGHT = 180
 const LOOK_HEIGHT = 80
 const ORBIT_SENSITIVITY = 0.0025
@@ -538,10 +607,22 @@ let orbitYaw = 0
 const ORBIT_PITCH_REST = Math.atan2(CHASE_HEIGHT, CHASE_DISTANCE)
 let orbitPitch = ORBIT_PITCH_REST
 const ORBIT_PITCH_MIN = 0.05
-const ORBIT_PITCH_MAX = 1.4
+const ORBIT_PITCH_MAX = 0.9 // avvicinato a ORBIT_PITCH_MAX_HANDLING (meno differenza tra i due stati, transizione meno marcata)
+// orbitPitch CRESCENTE porta la camera più in alto e vicina, sopra la testa
+// del robot → guarda più IN GIÙ. Quindi "guarda su" è l'opposto: orbitPitch
+// che SCENDE verso lo zero (camera bassa/lontana, quasi alla pari del
+// target) e oltre, in negativo (camera sotto il target, guarda in su per
+// davvero). In HANDLING si abbassa il minimo (non si alza il massimo) per
+// poter puntare il canestro
+const ORBIT_PITCH_MIN_HANDLING = -0.9
+// in HANDLING la camera è ormai a orientamento libero (non più orbita+lookAt
+// fisso): senza limite proprio, guardare troppo in giù punta la vista dentro
+// il pavimento/la base — un tetto più basso di ORBIT_PITCH_MAX qui
+const ORBIT_PITCH_MAX_HANDLING = 0.9
 // coupling pitch camera → gomito: guardare su/giù alza/abbassa l'end
-// effector di poco, non tantissimo — fattore piccolo apposta
-const ELBOW_PITCH_COUPLING = 0.2
+// effector di poco, non tantissimo — fattore piccolo apposta. Disattivato
+// per ora (messo a 0, non rimosso — resta la formula pronta a riattivarlo)
+const ELBOW_PITCH_COUPLING = 0
 
 // interpolazione angolare per la sterzata delle ruote: smoothing
 // esponenziale (framerate-independent) con via breve sul wrap-around
@@ -586,17 +667,62 @@ document.addEventListener('keydown', e => {
   // forza un nuovo click-per-entrare nel cambio modalità, per evitare
   // che un delta mouse residuo salti da uno schema di controllo all'altro
   if (controls.isLocked) controls.unlock()
+  // sicurezza: se si cambia modalità mentre si tiene il tasto destro
+  // premuto, non restare bloccati in HANDLING senza modo di rilasciarlo
+  if (mode !== 'play' && manipulator.state === RobotState.HANDLING) releaseBallHandling()
 })
 
 document.addEventListener('mousemove', e => {
   if (mode !== 'play' || !controls.isLocked) return
   orbitYaw -= e.movementX * ORBIT_SENSITIVITY
+  const isHandlingNow = manipulator.state === RobotState.HANDLING
+  const pitchMin = isHandlingNow ? ORBIT_PITCH_MIN_HANDLING : ORBIT_PITCH_MIN
+  const pitchMax = isHandlingNow ? ORBIT_PITCH_MAX_HANDLING : ORBIT_PITCH_MAX
   orbitPitch = THREE.MathUtils.clamp(
     orbitPitch + e.movementY * ORBIT_SENSITIVITY,
-    ORBIT_PITCH_MIN,
-    ORBIT_PITCH_MAX
+    pitchMin,
+    pitchMax
   )
 })
+
+// --- Presa palla (tasto destro tenuto premuto, solo in Play) ---
+// mentre è premuto: il palleggio si ferma, il braccio tiene la palla ferma
+// in una posa di presa, la camera si avvicina (vedi HANDLING_CHASE_DISTANCE
+// sopra). Al rilascio si torna al palleggio automatico, ripartendo da un
+// 'push' pulito invece che da dove si era fermato prima della presa
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault())
+document.addEventListener('mousedown', e => {
+  if (e.button !== 2 || mode !== 'play') return
+  // la mira riparte da un pitch fisso e sensato invece di quello che si
+  // aveva in DRIBBLE (che potrebbe essere un estremo, tipo guardando giù):
+  // currentHandlingPitch parte da lì e interpola verso questo target, così
+  // la transizione si vede scorrere invece di scattare di colpo
+  currentHandlingPitch = orbitPitch
+  orbitPitch = ORBIT_PITCH_REST
+  manipulator.setState(RobotState.HANDLING)
+})
+document.addEventListener('mouseup', e => {
+  if (e.button !== 2 || manipulator.state !== RobotState.HANDLING) return
+  releaseBallHandling()
+})
+function releaseBallHandling() {
+  manipulator.setState(RobotState.DRIBBLE)
+  // ORBIT_PITCH_MIN_HANDLING (fino a -0.9) è valido solo mentre si è in
+  // HANDLING — il clamp normale (ORBIT_PITCH_MIN=0.05) si applica di nuovo
+  // solo al prossimo movimento del mouse, quindi se si rilascia il tasto
+  // destro senza muovere il mouse orbitPitch resta a un valore fuori dal
+  // range normale e la camera finisce sotto il pavimento. Riportarlo subito
+  // dentro il range appena si torna in DRIBBLE evita il buco
+  orbitPitch = THREE.MathUtils.clamp(orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+  dribblePhase = 'push'
+  dribblePhaseT = 0
+  dribbleArmEase = 0
+  handlingGrip = 0
+  manipulator.controls.setGrip(0)
+  ballVelocityY = 0
+  previousPushPaddleY = null
+  lockOffset.set(0, 0, 0)
+}
 
 // --- Palleggio (sempre attivo, non solo in Play) ---
 // macchina a stati sincronizzata col gomito (no libreria fisica/tween):
@@ -767,6 +893,35 @@ function updateDribble(dt) {
   }
 }
 
+// RobotState.HANDLING (tasto destro tenuto premuto): posa di presa fissa,
+// niente accumulator/timestep fisso (non è una simulazione, è una posa
+// interpolata) — la palla resta incollata alla paletta con lo stesso offset
+// usato in 'push'. dribbleArmEase/handlingGrip si avvicinano rapidamente ai
+// target invece di scattarci sopra di colpo (stesso schema esponenziale
+// framerate-independent usato per sterzata ruote e zoom camera). Costanti
+// HANDLING_* dichiarate più in alto (vedi commento lì)
+let handlingGrip = 0
+function updateHandling(delta) {
+  const lerpFactor = 1 - Math.exp(-HANDLING_TRANSITION_SPEED * delta)
+  dribbleArmEase += (HANDLING_EASE - dribbleArmEase) * lerpFactor
+  handlingGrip += (HANDLING_GRIP_OFFSET - handlingGrip) * lerpFactor
+  manipulator.controls.setGrip(handlingGrip)
+
+  const elbowAmplitude = THREE.MathUtils.degToRad(DRIBBLE_ELBOW_AMPLITUDE_DEG)
+  const link1Amplitude = THREE.MathUtils.degToRad(DRIBBLE_LINK1_AMPLITUDE_DEG)
+  manipulator.controls.setDribbleOffsets(dribbleArmEase * elbowAmplitude, dribbleArmEase * link1Amplitude)
+
+  manipulator.paddle.updateWorldMatrix(true, false)
+  manipulator.paddle.getWorldPosition(paddleWorldPos)
+  angleToForward(manipulator.joints.base.rotation.y, paddleForwardDir)
+  rotateRight(paddleForwardDir, paddleSideDir)
+  paddleWorldPos
+    .addScaledVector(paddleForwardDir, BALL_OFFSET_FORWARD)
+    .addScaledVector(paddleSideDir, BALL_OFFSET_SIDE)
+    .addScaledVector(paddleDownDir, BALL_OFFSET_DOWN)
+  basketball.position.copy(paddleWorldPos)
+}
+
 function animate() {
   requestAnimationFrame(animate)
   const delta = Math.min(clock.getDelta(), 0.1)
@@ -790,7 +945,10 @@ function animate() {
     // orbitYaw=0 la base è a riposo (nessuna rotazione extra) e il
     // braccio punta già "in avanti" di default. Indipendente dal
     // movimento: si mira col mouse, ci si muove con WASD
-    manipulator.controls.setAimYaw(orbitYaw + THREE.MathUtils.degToRad(ARM_YAW_OFFSET_DEG))
+    const isHandlingNow = manipulator.state === RobotState.HANDLING
+    const armYawLerpFactor = 1 - Math.exp(-HANDLING_TRANSITION_SPEED * delta)
+    currentArmYawOffsetDeg += ((isHandlingNow ? 0 : ARM_YAW_OFFSET_DEG) - currentArmYawOffsetDeg) * armYawLerpFactor
+    manipulator.controls.setAimYaw(orbitYaw + THREE.MathUtils.degToRad(currentArmYawOffsetDeg))
     // guardare su/giù (orbitPitch) alza/abbassa di poco l'end effector,
     // ruotando il gomito e non l'ultimo link — coupling piccolo apposta.
     // setAimPitch gestisce internamente anche il rilivellamento della
@@ -812,14 +970,14 @@ function animate() {
     if (moveVec.lengthSq() > 0) {
       moveVec.normalize()
       robotFacing = Math.atan2(moveVec.x, moveVec.z)
-      manipulator.root.position.addScaledVector(moveVec, ROBOT_SPEED * delta)
+      manipulator.move(moveVec, delta)
     }
 
     // dash: scatto breve nella direzione di marcia, si somma al movimento
     // WASD normale se tenuto premuto durante il burst
     if (dashCooldown > 0) dashCooldown = Math.max(0, dashCooldown - delta)
     if (dashTimeRemaining > 0) {
-      manipulator.root.position.addScaledVector(dashDirection, ROBOT_SPEED * DASH_SPEED_MULTIPLIER * delta)
+      manipulator.root.position.addScaledVector(dashDirection, manipulator.speed * DASH_SPEED_MULTIPLIER * delta)
       dashTimeRemaining = Math.max(0, dashTimeRemaining - delta)
     }
     const dashReady = dashCooldown <= 0
@@ -835,29 +993,86 @@ function animate() {
     wheelsCurrentAngle = lerpAngle(wheelsCurrentAngle, wheelsTargetAngle, 1 - Math.exp(-WHEEL_TURN_SPEED * delta))
     manipulator.controls.setWheelsYaw(wheelsCurrentAngle)
 
+    // zoom in mentre si tiene il tasto destro (RobotState.HANDLING):
+    // stessa orbita, raggio interpolato invece di scattare di colpo, più un
+    // piccolo rialzo di quota (stesso target/lerp) per vedere il canestro
+    // invece che il pavimento da vicino
+    const isHandling = manipulator.state === RobotState.HANDLING
+    const zoomLerpFactor = 1 - Math.exp(-CHASE_DISTANCE_LERP_SPEED * delta)
+    const zoomDistanceLerpFactor = 1 - Math.exp(-CHASE_DISTANCE_ZOOM_LERP_SPEED * delta)
+    currentChaseDistance += ((isHandling ? HANDLING_CHASE_DISTANCE : CHASE_DISTANCE) - currentChaseDistance) * zoomDistanceLerpFactor
+    currentHeightBoost += ((isHandling ? HANDLING_HEIGHT_BOOST : 0) - currentHeightBoost) * zoomLerpFactor
+
     const robotPos = manipulator.root.position
-    // camForward è già stato calcolato sopra per il movimento: riusato qui
-    // invece di un terzo sin/cos(orbitYaw) scritto a mano
-    const horizDist = CHASE_DISTANCE * Math.cos(orbitPitch)
-    camera.position.set(
-      robotPos.x - camForward.x * horizDist,
-      robotPos.y + LOOK_HEIGHT + CHASE_DISTANCE * Math.sin(orbitPitch),
-      robotPos.z - camForward.z * horizDist
-    )
-    camera.lookAt(robotPos.x, robotPos.y + LOOK_HEIGHT, robotPos.z)
+    // camForward/camRightFlat già calcolati sopra per il movimento: riusati
+    // qui invece di ricalcolarli
+    if (isHandling) {
+      // In HANDLING la camera ha un orientamento LIBERO (yaw/pitch VERI,
+      // come una vista in prima/terza persona normale), non un lookAt che
+      // insegue sempre il robot. Col lookAt fisso il robot restava sempre
+      // centrato a schermo qualunque cosa facesse la posizione — alzare la
+      // camera la faceva solo guardare più dall'alto lo stesso punto, mai
+      // vedere oltre. Ora pitch ruota la vista, non sposta il bersaglio:
+      // si può davvero alzare lo sguardo sopra la testa del robot e vederlo
+      // scendere nell'inquadratura. Bonus: pitch e currentHeightBoost non si
+      // "combattono" più — la quota è solo un'aggiunta fissa alla posizione,
+      // il pitch non tocca più la posizione, solo l'orientamento
+      targetCameraPos.set(
+        robotPos.x - camForward.x * currentChaseDistance + camRightFlat.x * HANDLING_CAMERA_SIDE_OFFSET,
+        robotPos.y + LOOK_HEIGHT + currentHeightBoost,
+        robotPos.z - camForward.z * currentChaseDistance + camRightFlat.z * HANDLING_CAMERA_SIDE_OFFSET
+      )
+      // currentHandlingPitch insegue orbitPitch con lo stesso schema
+      // esponenziale del resto, invece di scattarci sopra di colpo — così
+      // l'ingresso in HANDLING (che resetta orbitPitch a ORBIT_PITCH_REST,
+      // vedi mousedown) si vede scorrere dolcemente invece di fratturarsi
+      const pitchLerpFactor = 1 - Math.exp(-HANDLING_PITCH_LERP_SPEED * delta)
+      currentHandlingPitch += (orbitPitch - currentHandlingPitch) * pitchLerpFactor
+      scratchEuler.set(-currentHandlingPitch, orbitYaw + Math.PI, 0, 'YXZ')
+      targetCameraQuat.setFromEuler(scratchEuler)
+    } else {
+      // comportamento originale (DRIBBLE/Play normale): camera in orbita,
+      // guarda sempre il robot — invariato
+      const horizDist = currentChaseDistance * Math.cos(orbitPitch)
+      targetCameraPos.set(
+        robotPos.x - camForward.x * horizDist,
+        robotPos.y + LOOK_HEIGHT + currentChaseDistance * Math.sin(orbitPitch),
+        robotPos.z - camForward.z * horizDist
+      )
+      // stesso risultato di camera.lookAt(), ma calcolato su un bersaglio
+      // di appoggio invece che applicato subito alla camera vera — serve
+      // per poter interpolare anche la rotazione sotto, non solo la posizione
+      scratchLookAtTarget.set(robotPos.x, robotPos.y + LOOK_HEIGHT, robotPos.z)
+      scratchLookAtMatrix.lookAt(targetCameraPos, scratchLookAtTarget, camera.up)
+      targetCameraQuat.setFromRotationMatrix(scratchLookAtMatrix)
+    }
+    // posizione E rotazione VERE interpolate verso il bersaglio (calcolato
+    // sopra da qualunque formula sia in uso) invece di un .set()/lookAt()
+    // diretto — questo è ciò che elimina lo scatto quando si passa da una
+    // formula all'altra (DRIBBLE ↔ HANDLING, in ENTRAMBE le direzioni), non
+    // solo i parametri che le alimentano. slerp per la rotazione (non lerp)
+    // perché interpola quaternioni lungo il percorso più breve, non lineare
+    // componente per componente
+    const camPosLerpFactor = 1 - Math.exp(-CAMERA_POSITION_LERP_SPEED * delta)
+    camera.position.lerp(targetCameraPos, camPosLerpFactor)
+    camera.quaternion.slerp(targetCameraQuat, camPosLerpFactor)
   }
 
   if (basketball) {
-    // consuma il tempo reale a fette fisse (vedi commento su DRIBBLE_FIXED_DT):
-    // un frame lento produce più iterazioni consecutive, uno veloce anche
-    // zero (il resto resta in accumulator per il prossimo) — updateDribble
-    // non vede mai altro dt che non sia questo valore costante. Clamp per
-    // evitare una "spirale della morte" (troppe iterazioni da recuperare)
-    // se il tab perde focus a lungo
-    dribbleAccumulator = Math.min(dribbleAccumulator + delta, DRIBBLE_FIXED_DT * 10)
-    while (dribbleAccumulator >= DRIBBLE_FIXED_DT) {
-      updateDribble(DRIBBLE_FIXED_DT)
-      dribbleAccumulator -= DRIBBLE_FIXED_DT
+    if (manipulator.state === RobotState.HANDLING) {
+      updateHandling(delta)
+    } else {
+      // consuma il tempo reale a fette fisse (vedi commento su DRIBBLE_FIXED_DT):
+      // un frame lento produce più iterazioni consecutive, uno veloce anche
+      // zero (il resto resta in accumulator per il prossimo) — updateDribble
+      // non vede mai altro dt che non sia questo valore costante. Clamp per
+      // evitare una "spirale della morte" (troppe iterazioni da recuperare)
+      // se il tab perde focus a lungo
+      dribbleAccumulator = Math.min(dribbleAccumulator + delta, DRIBBLE_FIXED_DT * 10)
+      while (dribbleAccumulator >= DRIBBLE_FIXED_DT) {
+        updateDribble(DRIBBLE_FIXED_DT)
+        dribbleAccumulator -= DRIBBLE_FIXED_DT
+      }
     }
   }
 
