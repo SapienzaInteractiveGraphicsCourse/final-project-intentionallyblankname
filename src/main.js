@@ -10,6 +10,10 @@ import { ManipulatorRobot } from './robots/ManipulatorRobot.js'
 import { RobotState } from './robots/RobotBase.js'
 import { createProceduralPBRMaps, drawBrushedMetal } from './robots/manipulator.js'
 import { Basketball, BallState } from './Basketball.js'
+import { GameMode } from './GameMode.js'
+import { TimeOfDay } from './TimeOfDay.js'
+import { SoundEffects } from './SoundEffects.js'
+import { CollisionWorld, RIM_RING_RADIUS } from './CollisionWorld.js'
 
 // --- Renderer ---
 // antialias:true qui non ha effetto: il rendering passa da EffectComposer
@@ -43,6 +47,13 @@ camera.rotation.order = 'YXZ'
 // spawn preso dal pannello debug (P), arrotondato ai valori più sensati
 camera.position.set(590, 540, 565)
 camera.rotation.set(THREE.MathUtils.degToRad(-60), THREE.MathUtils.degToRad(35), 0)
+
+// --- Audio ---
+// SoundEffects (src/SoundEffects.js): wrapper OOP sopra AudioListener +
+// suoni sintetizzati via Web Audio (nessun asset esterno, coerente col
+// resto del progetto) — stesso spirito di RobotBase/Basketball, un'unica
+// API (sfx.playX()) invece di funzioni globali sparse
+const sfx = new SoundEffects(camera)
 
 // --- Post-processing (SSAO) ---
 // kernelRadius è in unità mondo (scena ~cm-scale, quindi valori grandi tipo
@@ -94,6 +105,43 @@ sun.shadow.bias = -0.0005
 sun.shadow.normalBias = 2
 scene.add(sun)
 
+// preset di illuminazione scelti nel main menu (fase del giorno) — colore
+// e intensità di hemi/sun, più la posizione del sole (basso all'alba/
+// tramonto, alto a mezzogiorno). Nessun ciclo/interpolazione dinamica,
+// solo lo scatto al preset scelto una volta all'avvio
+// bgColor: scene.background — un colore solido, non una vera skybox
+// texturizzata (richiederebbe una HDR scaricata, in contrasto con
+// l'approccio "tutto procedurale/nessun asset esterno" del progetto).
+// NIGHT alzata rispetto al primo tentativo (hemi 0.35→0.6, sun 0.2→0.5):
+// troppo scuro, quasi nero — resta comunque la più buia delle 4, ma con
+// una luce blu lunare chiaramente presente, non pressoché assente
+const TIME_OF_DAY_PRESETS = {
+  [TimeOfDay.SUNRISE]: { hemiSky: 0xffb08a, hemiGround: 0x9a5a40, hemiIntensity: 0.9, sunColor: 0xffae5c, sunIntensity: 1.0, sunPos: [1500, 400, -800], bgColor: 0xffb379 },
+  [TimeOfDay.DAY]:     { hemiSky: 0xffd0c8, hemiGround: 0xc09080, hemiIntensity: 1.2, sunColor: 0xfff5ee, sunIntensity: 1.2, sunPos: [1500, 1200, -800], bgColor: 0x8fc8f0 },
+  [TimeOfDay.SUNSET]:  { hemiSky: 0xff8a5c, hemiGround: 0x7a3a2a, hemiIntensity: 0.85, sunColor: 0xff7040, sunIntensity: 0.9, sunPos: [-1500, 400, 800], bgColor: 0xd9502a },
+  [TimeOfDay.NIGHT]:   { hemiSky: 0x3a4a7c, hemiGround: 0x10101c, hemiIntensity: 0.6, sunColor: 0x6a8fd0, sunIntensity: 0.5, sunPos: [1500, 1200, -800], bgColor: 0x0a1030 },
+}
+function applyTimeOfDayPreset(time) {
+  const preset = TIME_OF_DAY_PRESETS[time]
+  hemi.color.set(preset.hemiSky)
+  hemi.groundColor.set(preset.hemiGround)
+  hemi.intensity = preset.hemiIntensity
+  sun.color.set(preset.sunColor)
+  sun.intensity = preset.sunIntensity
+  sun.position.set(...preset.sunPos)
+  scene.background = new THREE.Color(preset.bgColor)
+  // faretti canestro: accesi solo a SUNSET/NIGHT, di giorno la luce
+  // naturale basta (asta e corpo del faretto restano visibili comunque)
+  // MAI .visible = false: una luce con ombre che torna visibile per la
+  // prima volta forza Three.js ad allocare la sua shadow map e compilare
+  // gli shader shadow-casting sul momento, causando uno scatto percepibile
+  // proprio nell'istante del cambio — intensità a 0 invece: la luce resta
+  // sempre "attiva" nella pipeline (shadow map/shader già pronti dal primo
+  // frame), a 0 semplicemente non illumina nulla, zero costo di setup
+  const spotsOn = time === TimeOfDay.SUNSET || time === TimeOfDay.NIGHT
+  hoopSpotlights.forEach(spot => { spot.intensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0 })
+}
+
 // Lampioni: 4 punti luce alle posizioni dei globi del modello GLTF
 // (nodo "lights" → Symmetry_3 → Null_1_7 → Sphere_1, mesh "Sphere_1_light_0"
 // con materiale "light"). Posizioni ricavate analizzando i vertici del mesh
@@ -112,7 +160,7 @@ lampPositions.forEach(([x, y, z]) => {
   // lampione→terreno in questa scena (~200-270 unità) E = intensity/d²:
   // con 3000 l'illuminamento risultava ~0.04 lux, invisibile. Serve un
   // ordine di grandezza compatibile con la scala "grande" della scena
-  const lamp = new THREE.PointLight(0xfff2c0, 200000, 400, 2)
+  const lamp = new THREE.PointLight(0xfff2c0, 130000, 400, 2)
   lamp.position.set(x, y, z)
   lamp.castShadow = true
   // mapSize contenuto (vs 4096 del sole): 4 point light = 24 render pass
@@ -137,6 +185,105 @@ lampPositions.forEach(([x, y, z]) => {
   lamp.shadow.normalBias = 2
   scene.add(lamp)
 })
+
+// faretti sui canestri: SpotLight puntato sul ferro di ciascuno (stesse
+// coordinate XZ di hoops/backboardBoxes più sotto, ripetute qui come
+// letterali — hoops non esiste ancora a questo punto del file, stesso
+// approccio già usato da polePositionsXZ ecc.), più una piccola mesh come
+// corpo visibile del faretto — non solo una luce invisibile, stesso
+// spirito dei lampioni sopra. Il CORPO del faretto usa lo stesso materiale
+// grigio del "disc" (chassis) del robot (bodyMat in manipulator.js: color
+// 0x8a8f96, roughness 0.5, metalness 0.4, brushed metal scale 350) — non
+// esportato da manipulator.js, ricreato qui con la stessa identica ricetta.
+// L'ASTA invece userà sharedWoodMaterial (panchine/tronchi) — non ancora
+// pronto a questo punto del file (si popola dentro il loader del campo,
+// asincrono): pole/arm partono con un materiale placeholder e vengono
+// riassegnati a sharedWoodMaterial subito dopo che il campo ha finito di
+// caricare (vedi hoopPoleMeshes più sotto, nel loader.load del campo).
+// poleMetalMaps serve ANCORA per l'asta del lampione qui sotto nel
+// traverse del GLTF (Cylinder_5_floor1_0) — NON va rimossa anche se il
+// palo dei faretti canestro non la usa più
+const poleMetalMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 400), baseRoughness: 0.5, roughnessVariation: 0.12 })
+const hoopFixtureMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
+const hoopFixtureMaterial = new THREE.MeshStandardMaterial({
+  color: 0x8a8f96, roughness: 0.5, metalness: 0.4,
+  normalMap: hoopFixtureMaps.normalMap, roughnessMap: hoopFixtureMaps.roughnessMap,
+})
+const HOOP_SPOTLIGHT_POSITIONS = [
+  { x: 1079.85, z: 2.5 },
+  { x: -1074.15, z: -2.5 },
+]
+const HOOP_SPOTLIGHT_Y = 450 // sopra il bordo della backboard (BACKBOARD_TOP_Y=340)
+const HOOP_SPOTLIGHT_BACK_OFFSET = 150 // quanto indietro (lontano dal centro campo) rispetto al ferro
+const HOOP_POLE_RADIUS = 8
+// candela — nome condiviso perché applyTimeOfDayPreset deve poterci
+// tornare (0 quando "spento", vedi sotto: mai spot.visible=false, quello
+// forzerebbe Three.js a (ri)allocare shadow map/shader la prima volta che
+// torna visibile, con uno scatto percepibile nel cambio fase del giorno)
+const HOOP_SPOTLIGHT_INTENSITY = 180000
+const hoopPolePlaceholderMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.8 })
+const hoopSpotlightFixtureGeometry = new THREE.BoxGeometry(24, 16, 30)
+// pole+arm creati subito, riassegnati a sharedWoodMaterial più sotto
+const hoopPoleMeshes = []
+// accesi solo a SUNSET/NIGHT (vedi applyTimeOfDayPreset) — di giorno la
+// luce naturale basta, asta e corpo del faretto restano comunque sempre visibili
+const hoopSpotlights = []
+HOOP_SPOTLIGHT_POSITIONS.forEach(({ x, z }) => {
+  // asta a L: segmento verticale dietro la backboard (lontano dal centro
+  // campo — il segno di x decide da che lato siamo) + un braccio
+  // orizzontale che si allunga fin sopra al ferro, dove il faretto punta
+  // dritto in basso — non più un faretto che spara in diagonale da dietro
+  const poleX = x + Math.sign(x) * HOOP_SPOTLIGHT_BACK_OFFSET
+
+  // segmento verticale: da terra fino all'altezza del braccio
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(HOOP_POLE_RADIUS, HOOP_POLE_RADIUS, HOOP_SPOTLIGHT_Y, 10), hoopPolePlaceholderMaterial)
+  pole.position.set(poleX, HOOP_SPOTLIGHT_Y / 2, z)
+  // niente ombra propria: asta/braccio/corpo sono troppo vicini al proprio
+  // faretto (il braccio e il corpo condividono praticamente la stessa
+  // posizione della luce) — si autoproietterebbero addosso artefatti
+  pole.castShadow = false
+  scene.add(pole)
+  hoopPoleMeshes.push(pole)
+
+  // segmento orizzontale: dalla cima dell'asta fino sopra al ferro —
+  // CylinderGeometry di default è lungo l'asse Y locale, ruotato di 90°
+  // su Z per giacere orizzontale lungo X
+  const armLength = Math.abs(x - poleX)
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(HOOP_POLE_RADIUS, HOOP_POLE_RADIUS, armLength, 10), hoopPolePlaceholderMaterial)
+  arm.position.set((poleX + x) / 2, HOOP_SPOTLIGHT_Y, z)
+  arm.rotation.z = Math.PI / 2
+  arm.castShadow = false
+  scene.add(arm)
+  hoopPoleMeshes.push(arm)
+
+  // stessa scala fotometrica "grande scena" dei lampioni sopra (candela
+  // con decay=2, fisicamente corretto da three.js r155+) — a ~190 unità
+  // di altezza (faretto→ferro) serve un ordine di grandezza simile
+  const spot = new THREE.SpotLight(0xfff2c0, HOOP_SPOTLIGHT_INTENSITY, 900, THREE.MathUtils.degToRad(52), 0.8, 2)
+  spot.position.set(x, HOOP_SPOTLIGHT_Y, z)
+  spot.target.position.set(x, 262.55, z) // dritto in basso sul ferro, non in diagonale
+  spot.castShadow = true
+  spot.shadow.mapSize.set(512, 512)
+  spot.shadow.camera.near = 50
+  spot.shadow.camera.far = 900
+  spot.shadow.bias = -0.0005
+  spot.shadow.normalBias = 2
+  scene.add(spot)
+  scene.add(spot.target)
+  hoopSpotlights.push(spot)
+
+  const fixture = new THREE.Mesh(hoopSpotlightFixtureGeometry, hoopFixtureMaterial)
+  fixture.position.set(x, HOOP_SPOTLIGHT_Y, z)
+  fixture.castShadow = false // sta esattamente sulla luce stessa, si autoproietterebbe addosso
+  scene.add(fixture)
+})
+// DAY di default all'avvio (sostituisce lo 0xf0b8b8 segnaposto sopra) — la
+// variabile timeOfDay vera e propria è dichiarata più avanti nel file
+// (vicino a mode), qui si passa direttamente l'enum per evitare di
+// referenziarla prima della sua dichiarazione. Deve girare DOPO
+// hoopSpotlights (sopra), non subito dopo la dichiarazione della funzione:
+// applyTimeOfDayPreset legge quell'array
+applyTimeOfDayPreset(TimeOfDay.DAY)
 
 // --- Court ---
 // Plugin per KHR_materials_pbrSpecularGlossiness, rimosso da Three.js r152+.
@@ -187,7 +334,6 @@ loader.register(parser => new SpecularGlossinessPlugin(parser))
 // lampione invece di scaricare texture pronte — coerente con "niente asset
 // esterni" del resto del progetto. Costruite una volta sola, non per mesh
 const benchWoodMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 300), baseRoughness: 0.75, roughnessVariation: 0.15 })
-const poleMetalMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 400), baseRoughness: 0.5, roughnessVariation: 0.12 })
 // panchine E tronchi degli alberi condividono lo stesso materiale "wood" del
 // GLTF: un solo clone condiviso tra tutte le mesh che lo usano, invece di un
 // clone+texture per mesh (8 mesh panchine + i tronchi)
@@ -244,6 +390,10 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
     }
   })
   scene.add(gltf.scene)
+  // asta+braccio dei faretti canestro: create prima con un materiale
+  // placeholder (sharedWoodMaterial non esisteva ancora, si popola durante
+  // il traverse appena fatto), ora riassegnate al vero legno condiviso
+  if (sharedWoodMaterial) hoopPoleMeshes.forEach(mesh => { mesh.material = sharedWoodMaterial })
 })
 
 // --- Pallone (modello dedicato: color map + normal map + metallic/roughness) ---
@@ -262,156 +412,60 @@ const SHOT_FLOOR_BOUNCE_SPEED = BALL_BOUNCE_SPEED * 0.7
 // attrito forte, ma senza questo la palla scivolerebbe in orizzontale in
 // eterno (X/Z non vengono mai altrimenti toccate dal rimbalzo)
 const FLOOR_HORIZONTAL_DAMPING = 0.9
-// Collisione backboard + rilevamento canestro (Section 2, in corso): nessun
-// motore fisico, stesso approccio "a mano" già usato per drop/rise — sfera
-// (pallone) contro AABB, riflessione della velocità sulla normale più vicina
-// (vedi resolveSphereBoxCollision). Coordinate NON stimate a occhio: estratte
-// analizzando gli accessor del GLTF (bounding box world-space delle mesh
-// 'Cube_2_5_Mat_0'/'Cube_3_5_Mat_0' per i due pannelli, 'Torus_ring_0'/
-// 'Torus_2_ring_0' per i due ferri) — stesso procedimento già usato per
-// lampPositions più sotto, non un motore fisico che legge la scena da solo
-const BACKBOARD_HALF_THICKNESS = 4 // il pannello reale ha spessore ~0 nel GLTF (piano perfetto): gliene serve uno per il test contro-AABB
-// e=0 nella formula v'=v-(1+e)(v·n)n annulla la sola componente di velocità
-// lungo la normale (rimbalzo "morto", nessuna energia rimandata indietro),
-// e=1 è elastico perfetto (rimbalza alla stessa velocità). 0.5 era troppo
-// vivo (canestro quasi impossibile) — molto più smorzato
-const BACKBOARD_RESTITUTION = 0.15
-const backboardBoxes = [
-  new THREE.Box3(
-    new THREE.Vector3(1139.8 - BACKBOARD_HALF_THICKNESS, 230, -75),
-    new THREE.Vector3(1139.8 + BACKBOARD_HALF_THICKNESS, 340, 75)
-  ),
-  new THREE.Box3(
-    new THREE.Vector3(-1134.2 - BACKBOARD_HALF_THICKNESS, 230, -75),
-    new THREE.Vector3(-1134.2 + BACKBOARD_HALF_THICKNESS, 340, 75)
-  ),
-]
-// raggio di rilevamento canestro: leggermente sotto il raggio reale del
-// ferro (~43.8) — la palla deve passare vicino al centro, non solo sfiorare
-// l'anello, per contare come "dentro"
-const HOOP_DETECTION_RADIUS = 35
-const hoops = [
-  { center: new THREE.Vector3(1079.85, 262.55, 2.5), radius: HOOP_DETECTION_RADIUS },
-  { center: new THREE.Vector3(-1074.15, 262.55, -2.5), radius: HOOP_DETECTION_RADIUS },
-]
+// CollisionWorld (src/CollisionWorld.js): possiede backboard/ferro/muri/
+// pali/panchine (coordinate estratte dagli accessor del GLTF, non stimate
+// a occhio — vedi i commenti nel file) e il metodo resolve() che li
+// controlla tutti in un colpo solo. RIM_RING_RADIUS/RIM_TUBE_RADIUS
+// esportate a parte: servono anche qui sotto (HOOP_ASSIST_BASE_RADIUS)
+const collisionWorld = new CollisionWorld(BALL_RADIUS)
 // zona dei 3 punti: dentro l'arco (da entrambi i lati) la potenza del tiro è
 // dimezzata. Raggio NON stimato a occhio: distanza reale dal ferro al punto
 // più "alto" dell'arco (mesh 'Sweep_1_Basket ball lines _0'/'Sweep_3_2_...'),
 // estratta dagli accessor del GLTF — semplificato a un cerchio centrato sul
 // ferro (l'arco vero ha un tratto dritto agli angoli, qui non replicato)
 const THREE_POINT_RADIUS = 677
-// muri: TUTTE le 66 mesh reali del sottoalbero 'walls' nel GLTF (pannelli
-// verticali + gradoni delle tribune), non un'approssimazione a rettangolo
-// per lato — quella lasciava buchi ovunque i pannelli reali non arrivavano
-// fino all'estremo scelto, e la palla ci passava attraverso esattamente lì.
-// Bounding box world-space letti direttamente dagli accessor del GLTF (stesso
-// procedimento di backboard/ferro), uno ad uno, tramite script Node dedicato
-// — non un motore fisico che legge la scena da solo. Include anche i
-// gradoni delle tribune (Cube_6_*): niente più box "tribune" separato e
-// approssimato, sono già precisi qui
-const WALL_RESTITUTION = 0.55
-const wallBoxes = [
-  new THREE.Box3(new THREE.Vector3(-1731, 0, -1579), new THREE.Vector3(1265, 400, -1027)), // Cube_5_wall_0
-  new THREE.Box3(new THREE.Vector3(-1731, 0, -1047), new THREE.Vector3(945, 400, -1047)), // Cube_5_floor_0
-  new THREE.Box3(new THREE.Vector3(1245, 200, -1579), new THREE.Vector3(1445, 400, -1347)), // Cube_4_5_wall_0
-  new THREE.Box3(new THREE.Vector3(1245, 200, -1347), new THREE.Vector3(1445, 400, -1047)), // Cube_3_6__0
-  new THREE.Box3(new THREE.Vector3(945, 0, -1047), new THREE.Vector3(1245, 200, -847)), // Cube_2_6_wall_0
-  new THREE.Box3(new THREE.Vector3(1232, 0, -1579), new THREE.Vector3(1457, 200, -847)), // Cube_1_11_wall_0
-  new THREE.Box3(new THREE.Vector3(1468, -1, 1373), new THREE.Vector3(1488, 399, 1873)), // Cube_1_12_floor_0
-  new THREE.Box3(new THREE.Vector3(1465, 0, 832), new THREE.Vector3(1485, 400, 1332)), // Cube_1_0_3_floor_0
-  new THREE.Box3(new THREE.Vector3(1465, 0, 114), new THREE.Vector3(1485, 400, 614)), // Cube_1_1_3_floor_0
-  new THREE.Box3(new THREE.Vector3(1465, 0, -603), new THREE.Vector3(1485, 400, -103)), // Cube_1_2_4_floor_0
-  new THREE.Box3(new THREE.Vector3(1465, 0, -1321), new THREE.Vector3(1485, 400, -821)), // Cube_1_3_4_floor_0
-  new THREE.Box3(new THREE.Vector3(1445, 0, 1291), new THREE.Vector3(1465, 400, 1591)), // Cube_1_0_4_wall_0
-  new THREE.Box3(new THREE.Vector3(1445, 0, 573), new THREE.Vector3(1465, 400, 873)), // Cube_1_1_4_wall_0
-  new THREE.Box3(new THREE.Vector3(1445, 0, -144), new THREE.Vector3(1465, 400, 156)), // Cube_1_2_5_wall_0
-  new THREE.Box3(new THREE.Vector3(1445, 0, -862), new THREE.Vector3(1465, 400, -562)), // Cube_1_3_5_wall_0
-  new THREE.Box3(new THREE.Vector3(1445, 0, -1580), new THREE.Vector3(1465, 400, -1280)), // Cube_1_4_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 199, -1067), new THREE.Vector3(1444, 214, -1047)), // Cube_6_0_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 212, -1087), new THREE.Vector3(1444, 227, -1067)), // Cube_6_1_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 226, -1107), new THREE.Vector3(1444, 241, -1087)), // Cube_6_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 239, -1127), new THREE.Vector3(1444, 254, -1107)), // Cube_6_3_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 252, -1147), new THREE.Vector3(1444, 267, -1127)), // Cube_6_4_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 266, -1167), new THREE.Vector3(1444, 281, -1147)), // Cube_6_5_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 279, -1187), new THREE.Vector3(1444, 294, -1167)), // Cube_6_6_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 292, -1207), new THREE.Vector3(1444, 307, -1187)), // Cube_6_7_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 305, -1227), new THREE.Vector3(1444, 320, -1207)), // Cube_6_8_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 319, -1247), new THREE.Vector3(1444, 334, -1227)), // Cube_6_9_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 332, -1267), new THREE.Vector3(1444, 347, -1247)), // Cube_6_10_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 345, -1287), new THREE.Vector3(1444, 360, -1267)), // Cube_6_11_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 359, -1307), new THREE.Vector3(1444, 374, -1287)), // Cube_6_12_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 372, -1327), new THREE.Vector3(1444, 387, -1307)), // Cube_6_13_wall_0
-  new THREE.Box3(new THREE.Vector3(1266, 385, -1347), new THREE.Vector3(1444, 400, -1327)), // Cube_6_14_wall_0
-  new THREE.Box3(new THREE.Vector3(945, -1, -1026), new THREE.Vector3(965, 14, -848)), // Cube_6_0_2_wall_0
-  new THREE.Box3(new THREE.Vector3(965, 12, -1026), new THREE.Vector3(985, 27, -848)), // Cube_6_1_2_wall_0
-  new THREE.Box3(new THREE.Vector3(985, 26, -1026), new THREE.Vector3(1005, 41, -848)), // Cube_6_2_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1005, 39, -1026), new THREE.Vector3(1025, 54, -848)), // Cube_6_3_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1025, 52, -1026), new THREE.Vector3(1045, 67, -848)), // Cube_6_4_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1045, 66, -1026), new THREE.Vector3(1065, 81, -848)), // Cube_6_5_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1065, 79, -1026), new THREE.Vector3(1085, 94, -848)), // Cube_6_6_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1085, 92, -1026), new THREE.Vector3(1105, 107, -848)), // Cube_6_7_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1105, 105, -1026), new THREE.Vector3(1125, 120, -848)), // Cube_6_8_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1125, 119, -1026), new THREE.Vector3(1145, 134, -848)), // Cube_6_9_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1145, 132, -1026), new THREE.Vector3(1165, 147, -848)), // Cube_6_10_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1165, 145, -1026), new THREE.Vector3(1185, 160, -848)), // Cube_6_11_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1185, 159, -1026), new THREE.Vector3(1205, 174, -848)), // Cube_6_12_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1205, 172, -1026), new THREE.Vector3(1225, 187, -848)), // Cube_6_13_2_wall_0
-  new THREE.Box3(new THREE.Vector3(1225, 185, -1026), new THREE.Vector3(1245, 200, -848)), // Cube_6_14_2_wall_0
-  new THREE.Box3(new THREE.Vector3(-1734, -1, -1580), new THREE.Vector3(-1714, 399, -1080)), // Cube_1_13_floor_0
-  new THREE.Box3(new THREE.Vector3(-1731, 0, -1040), new THREE.Vector3(-1711, 400, -540)), // Cube_1_0_5_floor_0
-  new THREE.Box3(new THREE.Vector3(-1731, 0, -322), new THREE.Vector3(-1711, 400, 178)), // Cube_1_1_5_floor_0
-  new THREE.Box3(new THREE.Vector3(-1731, 0, 395), new THREE.Vector3(-1711, 400, 895)), // Cube_1_2_6_floor_0
-  new THREE.Box3(new THREE.Vector3(-1731, 0, 1113), new THREE.Vector3(-1711, 400, 1613)), // Cube_1_3_6_floor_0
-  new THREE.Box3(new THREE.Vector3(-1711, 0, -1299), new THREE.Vector3(-1691, 400, -999)), // Cube_1_0_6_wall_0
-  new THREE.Box3(new THREE.Vector3(-1711, 0, -581), new THREE.Vector3(-1691, 400, -281)), // Cube_1_1_6_wall_0
-  new THREE.Box3(new THREE.Vector3(-1711, 0, 137), new THREE.Vector3(-1691, 400, 437)), // Cube_1_2_7_wall_0
-  new THREE.Box3(new THREE.Vector3(-1711, 0, 854), new THREE.Vector3(-1691, 400, 1154)), // Cube_1_3_7_wall_0
-  new THREE.Box3(new THREE.Vector3(-1711, 0, 1572), new THREE.Vector3(-1691, 400, 1872)), // Cube_1_4_3_wall_0
-  new THREE.Box3(new THREE.Vector3(-1706, -1, 1850), new THREE.Vector3(-1672, 399, 1870)), // Cube_1_14_floor_0
-  new THREE.Box3(new THREE.Vector3(-1422, 0, 1870), new THREE.Vector3(-922, 400, 1890)), // Cube_1_0_7_floor_0
-  new THREE.Box3(new THREE.Vector3(-704, 0, 1870), new THREE.Vector3(-204, 400, 1890)), // Cube_1_1_7_floor_0
-  new THREE.Box3(new THREE.Vector3(14, 0, 1870), new THREE.Vector3(514, 400, 1890)), // Cube_1_2_8_floor_0
-  new THREE.Box3(new THREE.Vector3(732, 0, 1870), new THREE.Vector3(1232, 400, 1890)), // Cube_1_3_8_floor_0
-  new THREE.Box3(new THREE.Vector3(-1681, 0, 1850), new THREE.Vector3(-1381, 400, 1870)), // Cube_1_0_8_wall_0
-  new THREE.Box3(new THREE.Vector3(-963, 0, 1850), new THREE.Vector3(-663, 400, 1870)), // Cube_1_1_8_wall_0
-  new THREE.Box3(new THREE.Vector3(-245, 0, 1850), new THREE.Vector3(55, 400, 1870)), // Cube_1_2_9_wall_0
-  new THREE.Box3(new THREE.Vector3(473, 0, 1850), new THREE.Vector3(773, 400, 1870)), // Cube_1_3_9_wall_0
-  new THREE.Box3(new THREE.Vector3(1190, 0, 1850), new THREE.Vector3(1490, 400, 1870)), // Cube_1_4_4_wall_0
-]
-// pali lampione: piccola AABB verticale su ognuna delle 4 posizioni reali
-// (stesse di lampPositions più sotto), non un cilindro vero — approssimazione
-// sufficiente per un oggetto sottile che la palla colpisce di rado
-const POLE_RESTITUTION = 0.55
-const POLE_HALF_WIDTH = 20
-const polePositionsXZ = [[615.87, -845], [615.87, 845], [-615.87, -845], [-615.87, 845]]
-const poleBoxes = polePositionsXZ.map(([x, z]) => new THREE.Box3(
-  new THREE.Vector3(x - POLE_HALF_WIDTH, 0, z - POLE_HALF_WIDTH),
-  new THREE.Vector3(x + POLE_HALF_WIDTH, 300, z + POLE_HALF_WIDTH)
-))
-// panchine: bounding box reale dell'intero sottoalbero 'bench_1'/'bench' nel
-// GLTF (assi in legno + telaio), stesso procedimento di muri/pali/backboard
-const BENCH_RESTITUTION = 0.5
-const benchBoxes = [
-  new THREE.Box3(new THREE.Vector3(412, 0, 821), new THREE.Vector3(814, 50, 890)),
-  new THREE.Box3(new THREE.Vector3(-815, 0, 822), new THREE.Vector3(-413, 50, 891)),
-]
-function getEffectiveShotSpeed(worldPosition) {
+// condivisa da getEffectiveShotSpeed (riduzione potenza) e dal Point System
+// (2 o 3 punti) — stesso identico criterio "vicino a quale canestro", non
+// due calcoli separati che potrebbero disallinearsi
+function isInsideThreePointArc(worldPosition) {
   let nearestDistSq = Infinity
-  for (const hoop of hoops) {
+  for (const hoop of collisionWorld.hoops) {
     const dx = worldPosition.x - hoop.center.x
     const dz = worldPosition.z - hoop.center.z
     nearestDistSq = Math.min(nearestDistSq, dx * dx + dz * dz)
   }
-  const insideArc = nearestDistSq < THREE_POINT_RADIUS * THREE_POINT_RADIUS
-  return insideArc ? SHOT_SPEED * 0.6 : SHOT_SPEED
+  return nearestDistSq < THREE_POINT_RADIUS * THREE_POINT_RADIUS
 }
-// collisione fisica col ferro stesso (non solo rilevamento canestro): il
-// toro giace nel piano XZ (normale Y) — raggio principale/tubo derivati
-// dagli stessi accessor GLTF di 'Torus_ring_0'/'Torus_2_ring_0' (bounding
-// box world ±43.75 in XZ, ±3.75 in Y attorno al centro)
-const RIM_RING_RADIUS = 40
-const RIM_TUBE_RADIUS = 4
-const RIM_RESTITUTION = 0.3
+
+function getEffectiveShotSpeed(worldPosition) {
+  return isInsideThreePointArc(worldPosition) ? SHOT_SPEED * 0.6 : SHOT_SPEED
+}
+// campo potenziale attrattivo verso il centro canestro (stat SHOOTING) — un
+// tronco di cono che si allarga salendo, non un raggio costante per tutta
+// l'altezza: raggio del FERRO esattamente a livello del ferro (non uno
+// stretto a caso), raggio più largo (più permissivo) salendo fino alla
+// cima della backboard, poi niente oltre. Niente forza sulla componente Y
+// (non tocca l'arco del tiro, solo l'allineamento orizzontale) — la forza
+// del tiro resta quella che l'utente vede nella preview, questo è un aiuto
+// SUL contatto, non un cambio di potenza
+const HOOP_ASSIST_BASE_RADIUS = RIM_RING_RADIUS // raggio del cono esattamente al livello del ferro = raggio vero del ferro
+const HOOP_ASSIST_TOP_RADIUS = 90               // raggio del cono in cima (più permissivo)
+// tasso di correzione (1/s): quota della distanza residua riassorbita al
+// secondo, a strength=1 e sul bordo del cono. NON un'accelerazione — quella
+// si accumula con quanto tempo la palla passa dentro il cono, e sui tiri
+// da vicino/lenti (più tempo dentro la zona) sparava la palla OLTRE il
+// centro invece di correggerla. Una correzione di POSIZIONE (frazione
+// della distanza residua ad ogni passo) converge verso il centro ma non
+// può mai superarlo, qualunque sia il tempo di permanenza
+const HOOP_ASSIST_PULL_RATE = 4
+// scala SHOOTING 1-3 (non più 1-5): 1 = NESSUNA correzione, 2 = la
+// correzione tarata prima come "vecchio stat 4", 3 = la correzione tarata
+// prima come "vecchio stat 8" — con la vecchia formula lineare (stat-1)/4,
+// f(1)=0, f(2)=0.75, f(3)=1.75. Fit quadratico esatto sui tre punti:
+// (stat-1)(stat+4)/8
+function shootingStatToAssistStrength(shootingStat) {
+  return (shootingStat - 1) * (shootingStat + 4) / 8
+}
 // il punto di tracking (manipulator.paddle = paddleCenter) non coincide col
 // centro visivo reale della paletta a occhio: questi 3 offset (unità
 // mondo) si sommano in animate(), lungo gli assi LOCALI della paletta
@@ -573,8 +627,14 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
 // Due mesh separate (nero + colorato) ricostruite ogni frame dagli stessi
 // punti condivisi nel punto di giunzione: essendo geometria reale (non due
 // shader indipendenti che estrudono in screen-space) restano allineate.
-const TRAJECTORY_DT = 0.02
-const TRAJECTORY_MAX_STEPS = 600       // ~12s: una palombella molto alta ha un tempo di volo lungo, deve rientrare nel budget
+// 0.02 (50Hz) era troppo grezzo rispetto al volo fisico reale
+// (SHOT_PHYSICS_SUBSTEP_DT=1/240, ~240Hz): a velocità di tiro normali la
+// palla si sposta ~22 unità a passo, abbastanza da "saltare oltre" la
+// stretta finestra di HOOP_DETECTION_RADIUS (20) proprio nell'istante del
+// vero attraversamento — tiri che in realtà entrano (verde) mostravano
+// blu (ferro) nella preview solo per la grana del campionamento
+const TRAJECTORY_DT = 0.005
+const TRAJECTORY_MAX_STEPS = 2400      // ~12s allo stesso dt più fine (0.005*2400=12), stesso budget di prima
 const TRAJECTORY_TUBE_RADIUS = 4       // unità mondo
 const TRAJ_COLOR_BLACK = 0x111111
 const TRAJ_COLOR_BLUE = 0x1b3a6b
@@ -648,12 +708,21 @@ function updateTrajectoryPreview() {
   trajColoredPoints.length = 0
   let coloredMaterialColor = TRAJ_COLOR_BLUE
   let collided = false
-  let previousY = trajPos.y
+  // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto esatto
+  // di attraversamento del piano del ferro, le serve X/Z di prima
+  const previousTrajPos = trajPos.clone()
   trajBlackPoints.push(trajPos.clone())
 
+  const hoopAssistStrength = shootingStatToAssistStrength(manipulator.stats.shooting)
+  // mappa dei cooldown SEPARATA da shotCollisionCooldowns (volo reale): la
+  // preview simula un tiro ipotetico ogni frame mentre si mira, non deve
+  // "consumare" il cooldown degli oggetti reali prima che il tiro parta
+  // davvero — nuova ad ogni chiamata, non serve svuotarla esplicitamente
+  const previewCollisionCooldowns = new Map()
   for (let i = 0; i < TRAJECTORY_MAX_STEPS; i++) {
     trajVel.y -= BALL_GRAVITY * TRAJECTORY_DT
     trajPos.addScaledVector(trajVel, TRAJECTORY_DT)
+    applyHoopAssist(trajPos, trajVel, TRAJECTORY_DT, hoopAssistStrength)
 
     // canestro: stesso criterio di checkHoopScore (isHoopCrossing, condiviso)
     // — controllato SEMPRE, anche dopo un tocco su ferro/backboard (un tiro
@@ -663,15 +732,15 @@ function updateTrajectoryPreview() {
     // spesso scatta PRIMA — senza ricontrollare hitScore ad ogni passo il
     // verde non scattava mai
     let hitScore = false
-    for (const hoop of hoops) {
-      if (isHoopCrossing(previousY, trajPos, hoop)) hitScore = true
+    for (const hoop of collisionWorld.hoops) {
+      if (isHoopCrossing(previousTrajPos, trajPos, hoop)) hitScore = true
     }
     // backboard/ferro/muri/pali/panchine (resolveEnvironmentCollisions,
     // condivisa con updateShotFlight): rilevanti SOLO per decidere quando
     // finisce il tratto nero — una volta "collided" non contano più (il
     // canestro può ancora ricolorare in verde, vedi sotto, ma non serve
     // ricontrollarli)
-    const hitVisible = !collided && resolveEnvironmentCollisions(trajPos, trajVel)
+    const hitVisible = !collided && collisionWorld.resolve(trajPos, trajVel, TRAJECTORY_DT, previewCollisionCooldowns, BALL_RADIUS)
     // pavimento: qui resta uno stop secco (a differenza di updateShotFlight,
     // che ora rimbalza con SHOT_FLOOR_BOUNCE_SPEED) — la preview si ferma
     // alla prima cosa "interessante" toccata, mostrare un rimbalzo infinito
@@ -682,7 +751,7 @@ function updateTrajectoryPreview() {
       trajVel.set(0, 0, 0)
       hitFloor = true
     }
-    previousY = trajPos.y
+    previousTrajPos.copy(trajPos)
 
     if (hitScore) {
       // priorità assoluta sul colore: anche se si era già "collided" (blu,
@@ -738,9 +807,24 @@ const hint = document.getElementById('hint')
 // guardia: senza questa, il tiro (click sinistro, vedi sezione Tiro più
 // sotto) richiamerebbe lock() anche a pointer già agganciato ogni volta —
 // innocuo di per sé ma non necessario
-renderer.domElement.addEventListener('click', () => { if (!controls.isLocked) controls.lock() })
+renderer.domElement.addEventListener('click', () => { if (!controls.isLocked && mode !== 'menu') controls.lock() })
 controls.addEventListener('lock', () => hint.style.display = 'none')
-controls.addEventListener('unlock', () => hint.style.display = '')
+// il tasto M (sotto) chiama anch'esso controls.unlock() per un motivo
+// diverso (forzare un nuovo "click per entrare" nel cambio Spectate/Play,
+// non "il giocatore vuole la pausa") — PointerLockControls non distingue
+// la CAUSA dell'unlock (Esc intercettato dal browser vs unlock() chiamato
+// da codice), quindi serve questo flag per non aprire la pausa anche lì
+let suppressPauseOnUnlock = false
+controls.addEventListener('unlock', () => {
+  hint.style.display = ''
+  if (suppressPauseOnUnlock) { suppressPauseOnUnlock = false; return }
+  // col pointer agganciato, Esc viene intercettato dal browser (Pointer
+  // Lock API) e sgancia PRIMA che il keydown arrivi alla pagina — questo è
+  // l'unico punto che vede in modo affidabile "il pointer si è appena
+  // sganciato mentre si giocava", openPauseMenu() più sotto è idempotente
+  // (no-op se il menu è già aperto per un altro motivo)
+  openPauseMenu()
+})
 
 const keys = {}
 document.addEventListener('keydown', e => keys[e.code] = true)
@@ -1020,7 +1104,18 @@ function rotateRight(forward, out) {
   return out.set(-forward.z, 0, forward.x)
 }
 
-let mode = 'spectate'
+// scelti nel main menu (GAMEMODES/robot/fase del giorno) prima di entrare
+// in scena — solo PRACTICE è davvero implementata, 1v1/3v3 richiedono
+// nemici (Section 3)
+let gameMode = GameMode.PRACTICE
+let timeOfDay = TimeOfDay.DAY
+
+// 'menu' è un terzo valore di mode (non una FSM/enum a parte — mode è
+// sempre stata una semplice stringa, un terzo valore basta): mentre il
+// main menu è aperto non si può passare a 'play' col tasto M, e la camera
+// segue l'orbita lenta del menu invece della logica normale. Diventa
+// 'spectate' quando il menu si chiude (fine flusso di selezione)
+let mode = 'menu'
 const modeIndicator = document.getElementById('mode-indicator')
 let robotFacing = 0 // yaw ruote/robot (rad), persiste quando fermo
 const moveVec = new THREE.Vector3()
@@ -1129,14 +1224,16 @@ document.addEventListener('keydown', e => {
 })
 
 document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyM' || e.repeat) return
+  if (e.code !== 'KeyM' || e.repeat || mode === 'menu') return
   mode = mode === 'spectate' ? 'play' : 'spectate'
   modeIndicator.textContent = `MODE: ${mode.toUpperCase()}`
   dashPanel.classList.toggle('hidden', mode !== 'play')
   crosshair.classList.toggle('hidden', mode !== 'play')
   // forza un nuovo click-per-entrare nel cambio modalità, per evitare
   // che un delta mouse residuo salti da uno schema di controllo all'altro
-  if (controls.isLocked) controls.unlock()
+  // — suppressPauseOnUnlock: questo unlock è un dettaglio del cambio
+  // modalità, non "il giocatore ha premuto Esc per mettere in pausa"
+  if (controls.isLocked) { suppressPauseOnUnlock = true; controls.unlock() }
   // sicurezza: se si cambia modalità mentre si tiene il tasto destro
   // premuto, non restare bloccati in HANDLING senza modo di rilasciarlo
   // (non se un tiro è in corso: interromperlo a metà lascerebbe l'animazione
@@ -1243,6 +1340,10 @@ function getShotDirection(out) {
 let shootPhase = 'idle' // 'idle' | 'windup' | 'release'
 let shootPhaseT = 0
 let shootReleased = false // per-tiro: true dal frame in cui la palla lascia davvero la paletta
+// catturata al momento del rilascio (posizione del ROBOT, non della palla
+// quando arriva al canestro) — la regola dei 2/3 punti dipende da dove si
+// tirava, non da dove si trova la palla quando entra
+let shotWasInsideArc = false
 let shootStateTransitionTimer = 0 // secondi rimanenti prima del vero cambio di stato (vedi SHOOT_STATE_TRANSITION_DELAY)
 // pose di gomito/link1 al momento del click, punto di partenza del lerp di
 // 'windup' — senza questo la prima svg dello windup scatterebbe dalla posa
@@ -1256,15 +1357,27 @@ let shootStartTilt = 0
 // di continuare a inseguire la camera anche durante il recupero
 let shootRecoverStartAimPitch = 0
 const shotVelocity = new THREE.Vector3()
-// dopo un urto (backboard/ferro), quanto ignorare NUOVE collisioni: con
-// restituzione bassa (rimbalzo morbido voluto) la palla si allontana dalla
-// superficie molto lentamente — così lentamente che senza questa pausa il
-// check "sfera dentro il volume espanso" la ricattura ogni singolo frame
-// (la spinge di nuovo esattamente sul bordo, riflette di nuovo una velocità
-// già debole), restando visivamente "incollata" al punto d'urto per un bel
-// po' invece di allontanarsene con un arco pulito
-const SHOT_COLLISION_COOLDOWN = 0.3
-let shotCollisionCooldown = 0
+// dopo un urto (backboard/ferro/...), quanto ignorare NUOVE collisioni CON
+// LO STESSO OGGETTO: con restituzione bassa (rimbalzo morbido voluto) la
+// palla si allontana dalla superficie molto lentamente — così lentamente
+// che senza questa pausa il check "sfera dentro il volume espanso" la
+// ricattura ogni singolo frame (la spinge di nuovo esattamente sul bordo,
+// riflette di nuovo una velocità già debole), restando visivamente
+// "incollata" al punto d'urto per un bel po' invece di allontanarsene con
+// un arco pulito. PER OGGETTO (WeakMap), non un unico timer globale: un
+// timer globale sospendeva TUTTE le collisioni per 0.3s dopo un rimbalzo
+// qualsiasi — un rimbalzo sul ferro seguito a ruota da un volo verso la
+// backboard ATTRAVERSAVA la backboard senza mai risultare in collisione,
+// perché il cooldown (nato per il ferro) bloccava anche lei
+// Map, non WeakMap: i collidable (collisionWorld.backboardBoxes/hoops/
+// wallBoxes/...) sono un insieme fisso e permanente per tutta la sessione
+// (mai creati/distrutti a runtime), quindi niente rischio di leak — e
+// serve poterla svuotare (clearAllCollisionCooldowns) a inizio tiro/reset,
+// cosa che WeakMap non permette
+const shotCollisionCooldowns = new Map() // oggetto collidable -> secondi rimanenti
+function clearAllCollisionCooldowns() {
+  shotCollisionCooldowns.clear()
+}
 
 // --- Pickup automatico (palla FREE toccata dal robot) ---
 // nessun tasto: camminare abbastanza vicino a una palla libera (basketball.
@@ -1294,7 +1407,7 @@ document.addEventListener('mousedown', e => {
   shootPhase = 'windup'
   shootPhaseT = 0
   shootReleased = false
-  shotCollisionCooldown = 0
+  clearAllCollisionCooldowns()
 })
 
 // tasto R: "ricarica" la palla per testare rapidamente il tiro senza dover
@@ -1310,7 +1423,7 @@ document.addEventListener('keydown', e => {
   shootPhaseT = 0
   shootReleased = false
   shootStateTransitionTimer = 0
-  shotCollisionCooldown = 0
+  clearAllCollisionCooldowns()
   manipulator.controls.setAimPitch(0)
   manipulator.controls.setShootTilt(0)
   manipulator.controls.setDribbleOffsets(0, 0)
@@ -1477,6 +1590,9 @@ function updateDribble(dt) {
       riseBallisticY = ballY // stato fisico vero di 'rise', riparte dal punto di rimbalzo
       dribblePhase = 'rise'
       dribblePhaseT = 0
+      // volume ridotto: il palleggio automatico non si ferma mai, a piena
+      // intensità diventava fastidioso in loop continuo
+      sfx.playBounce(0.35)
     }
     basketball.position.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
   } else { // 'rise'
@@ -1552,61 +1668,9 @@ function updateHandling(delta) {
 // al momento del rilascio (vedi sotto) — da lì la palla vola come un vero
 // proiettile sotto gravità pura (stessa BALL_GRAVITY del palleggio),
 // staccata da qualunque tracking sulla paletta
-// sfera (pallone) contro AABB, senza motore fisico: trova la faccia con la
-// penetrazione minore (quella da cui "conviene" uscire) e la tratta come
-// normale di contatto, poi riflette solo la componente di velocità che va
-// VERSO la superficie — v' = v - (1+restituzione)(v·n)n, la formula
-// standard di rimbalzo elastico/anelastico. Dipende quindi esattamente da
-// angolo di incidenza (v·n) e velocità, non da una regola fissa
-const scratchCollisionBox = new THREE.Box3()
-const scratchCollisionNormal = new THREE.Vector3()
-// ritorna true se c'è stata davvero una collisione (usato anche dalla
-// preview di traiettoria per sapere dove si ferma il tratto nero)
-function resolveSphereBoxCollision(position, velocity, box, radius, restitution) {
-  scratchCollisionBox.copy(box).expandByScalar(radius)
-  if (!scratchCollisionBox.containsPoint(position)) return false
-  const dists = [
-    position.x - scratchCollisionBox.min.x, scratchCollisionBox.max.x - position.x,
-    position.y - scratchCollisionBox.min.y, scratchCollisionBox.max.y - position.y,
-    position.z - scratchCollisionBox.min.z, scratchCollisionBox.max.z - position.z,
-  ]
-  let minIdx = 0
-  for (let i = 1; i < 6; i++) if (dists[i] < dists[minIdx]) minIdx = i
-  const axis = Math.floor(minIdx / 2) // 0=x, 1=y, 2=z
-  const sign = minIdx % 2 === 0 ? -1 : 1 // faccia min → normale negativa, faccia max → positiva
-  scratchCollisionNormal.set(0, 0, 0).setComponent(axis, sign)
-  // spinge la palla esattamente sul bordo del volume espanso (risolve la
-  // compenetrazione) lungo la normale di uscita
-  position.addScaledVector(scratchCollisionNormal, dists[minIdx])
-  const vDotN = velocity.dot(scratchCollisionNormal)
-  if (vDotN < 0) velocity.addScaledVector(scratchCollisionNormal, -(1 + restitution) * vDotN)
-  return true
-}
-
-// sfera contro toro (il ferro): il toro giace nel piano XZ, quindi si
-// proietta il centro palla sul cerchio principale (raggio RIM_RING_RADIUS)
-// per trovare il punto più vicino sul "tubo" — da lì è di nuovo un urto
-// sfera-sfera (raggio RIM_TUBE_RADIUS + BALL_RADIUS), stessa formula di
-// riflessione di sopra
-const scratchRimPlanar = new THREE.Vector3()
-const scratchRimNearest = new THREE.Vector3()
-const scratchRimNormal = new THREE.Vector3()
-function resolveSphereTorusCollision(position, velocity, center, ringRadius, tubeRadius, radius, restitution) {
-  scratchRimPlanar.set(position.x - center.x, 0, position.z - center.z)
-  const planarDist = scratchRimPlanar.length()
-  if (planarDist < 1e-6) return false // esattamente sull'asse verticale del ferro: nessuna direzione radiale sensata
-  scratchRimPlanar.multiplyScalar(ringRadius / planarDist)
-  scratchRimNearest.set(center.x + scratchRimPlanar.x, center.y, center.z + scratchRimPlanar.z)
-  scratchRimNormal.copy(position).sub(scratchRimNearest)
-  const dist = scratchRimNormal.length()
-  const minDist = tubeRadius + radius
-  if (dist >= minDist || dist < 1e-6) return false
-  scratchRimNormal.multiplyScalar(1 / dist)
-  position.addScaledVector(scratchRimNormal, minDist - dist)
-  const vDotN = velocity.dot(scratchRimNormal)
-  if (vDotN < 0) velocity.addScaledVector(scratchRimNormal, -(1 + restitution) * vDotN)
-  return true
-}
+// resolveSphereBoxCollision/resolveSphereTorusCollision/resolveEnvironmentCollisions
+// spostate in CollisionWorld (src/CollisionWorld.js, istanziata più sotto
+// come collisionWorld) — stesso comportamento, solo raccolto in una classe
 
 // rilevamento canestro: nessuna vera "mesh trigger", stesso spirito
 // imperativo del resto del progetto — attraversamento del piano orizzontale
@@ -1617,19 +1681,40 @@ function resolveSphereTorusCollision(position, velocity, center, ringRadius, tub
 // della fisica del progetto. Estratta a parte (non solo inline in
 // checkHoopScore) perché la preview di traiettoria ha bisogno dello stesso
 // identico test, ricontrollato ad ogni passo — vedi updateTrajectoryPreview
-function isHoopCrossing(previousY, position, hoop) {
-  if (previousY <= hoop.center.y || position.y > hoop.center.y) return false
-  const dx = position.x - hoop.center.x
-  const dz = position.z - hoop.center.z
+// previousPos è il vettore COMPLETO del passo precedente (non solo la Y):
+// serve per interpolare il punto ESATTO in cui la traiettoria attraversa
+// il piano del ferro, non testare la posizione già "oltre" a fine passo.
+// Con un solo campione discreto il test è sensibile alla grana del passo
+// (TRAJECTORY_DT nella preview è più grezzo di SHOT_PHYSICS_SUBSTEP_DT nel
+// volo reale) — tiri che davvero entrano, specialmente da vicino dove la
+// traiettoria è più verticale vicino al ferro, potevano risultare "appena
+// fuori" nella preview pur essendo dentro nella realtà
+function isHoopCrossing(previousPos, position, hoop) {
+  if (previousPos.y <= hoop.center.y || position.y > hoop.center.y) return false
+  const t = (previousPos.y - hoop.center.y) / (previousPos.y - position.y)
+  const crossX = THREE.MathUtils.lerp(previousPos.x, position.x, t)
+  const crossZ = THREE.MathUtils.lerp(previousPos.z, position.z, t)
+  const dx = crossX - hoop.center.x
+  const dz = crossZ - hoop.center.z
   return Math.hypot(dx, dz) <= hoop.radius
 }
 
-function checkHoopScore(previousY, position) {
-  for (const hoop of hoops) {
-    if (isHoopCrossing(previousY, position, hoop)) {
-      // placeholder: nessun Point System/HUD ancora (task separato nel
-      // roadmap) — solo la rilevazione dell'evento per ora
+// Point System: 2 punti se si tirava da dentro l'arco dei 3 punti, 3 se da
+// fuori (shotWasInsideArc, catturato al rilascio — non dove si trova la
+// palla quando entra), canestro in uno qualunque dei due ferri vale
+let score = 0
+const scoreValueEl = document.getElementById('score-value')
+function addScore(points) {
+  score += points
+  scoreValueEl.textContent = String(score)
+}
+
+function checkHoopScore(previousPos, position) {
+  for (const hoop of collisionWorld.hoops) {
+    if (isHoopCrossing(previousPos, position, hoop)) {
       console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
+      addScore(shotWasInsideArc ? 2 : 3)
+      sfx.playScore()
     }
   }
 }
@@ -1639,26 +1724,35 @@ function checkHoopScore(previousY, position) {
 // traiettoria (updateTrajectoryPreview), copiato due volte — un nuovo tipo
 // di collidable andava aggiunto in ENTRAMBI i posti separatamente. Un solo
 // giro condiviso, richiamato da entrambi; ritorna true se almeno un urto
-function resolveEnvironmentCollisions(position, velocity) {
-  let hit = false
-  for (const box of backboardBoxes) {
-    if (resolveSphereBoxCollision(position, velocity, box, BALL_RADIUS, BACKBOARD_RESTITUTION)) hit = true
+// spinge orizzontalmente (X/Z, mai Y) verso l'asse verticale del canestro
+// quando la palla è dentro il cono d'assistenza — chiamata da entrambi gli
+// step fisici (volo vero e preview) così la preview mostra ESATTAMENTE la
+// curva che poi succede davvero, non è un bias nascosto solo a runtime
+function applyHoopAssist(position, velocity, dt, strength) {
+  if (strength <= 0) return
+  for (const hoop of collisionWorld.hoops) {
+    const heightAboveRim = position.y - hoop.center.y
+    // altezza del cono = dalla cima reale della backboard, non un valore
+    // a caso — sopra la backboard il tiro è comunque ormai "andato"
+    const assistHeight = collisionWorld.BACKBOARD_TOP_Y - hoop.center.y
+    if (heightAboveRim < 0 || heightAboveRim > assistHeight) continue
+    const coneT = heightAboveRim / assistHeight
+    const coneRadius = THREE.MathUtils.lerp(HOOP_ASSIST_BASE_RADIUS, HOOP_ASSIST_TOP_RADIUS, coneT)
+    const dx = hoop.center.x - position.x
+    const dz = hoop.center.z - position.z
+    const dist = Math.hypot(dx, dz)
+    if (dist < 1e-6 || dist > coneRadius) continue
+    // correzione di POSIZIONE (frazione della distanza residua verso il
+    // centro), non un'accelerazione sulla velocità: quella si accumula con
+    // quanto tempo la palla passa nel cono (tiri da vicino/lenti = più
+    // tempo dentro = spinta eccessiva, la palla finiva OLTRE il centro
+    // invece che dentro). Più forte verso il bordo del cono (dove "quasi
+    // ci arriva da solo"), non al centro (dove non serve aiuto) — ma non
+    // può mai superare il centro qualunque sia strength/dt
+    const pull = Math.min(strength * (dist / coneRadius) * HOOP_ASSIST_PULL_RATE * dt, 1)
+    position.x += dx * pull
+    position.z += dz * pull
   }
-  for (const hoop of hoops) {
-    if (resolveSphereTorusCollision(position, velocity, hoop.center, RIM_RING_RADIUS, RIM_TUBE_RADIUS, BALL_RADIUS, RIM_RESTITUTION)) hit = true
-  }
-  // muri e pali: oggetti rigidi, restituzione più viva della backboard (che
-  // è smorzata apposta)
-  for (const box of wallBoxes) {
-    if (resolveSphereBoxCollision(position, velocity, box, BALL_RADIUS, WALL_RESTITUTION)) hit = true
-  }
-  for (const box of poleBoxes) {
-    if (resolveSphereBoxCollision(position, velocity, box, BALL_RADIUS, POLE_RESTITUTION)) hit = true
-  }
-  for (const box of benchBoxes) {
-    if (resolveSphereBoxCollision(position, velocity, box, BALL_RADIUS, BENCH_RESTITUTION)) hit = true
-  }
-  return hit
 }
 
 // abbastanza fine da non "bucare" lo spessore sottile di backboard/ferro
@@ -1677,20 +1771,23 @@ function updateShotFlight(delta) {
   }
 }
 
+const scratchPreviousShotPos = new THREE.Vector3()
 function stepShotFlight(dt) {
-  const previousY = basketball.position.y
+  // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto
+  // esatto di attraversamento del piano del ferro, le serve X/Z di prima
+  scratchPreviousShotPos.copy(basketball.position)
   shotVelocity.y -= BALL_GRAVITY * dt
   basketball.position.addScaledVector(shotVelocity, dt)
+  applyHoopAssist(basketball.position, shotVelocity, dt, shootingStatToAssistStrength(manipulator.stats.shooting))
 
-  if (shotCollisionCooldown > 0) {
-    shotCollisionCooldown -= dt
-  } else if (resolveEnvironmentCollisions(basketball.position, shotVelocity)) {
-    shotCollisionCooldown = SHOT_COLLISION_COOLDOWN
-  }
-  checkHoopScore(previousY, basketball.position)
+  // solo nel volo reale (non nella preview, che condivide la stessa
+  // funzione ma non deve mai suonare mentre si sta solo mirando)
+  if (collisionWorld.resolve(basketball.position, shotVelocity, dt, shotCollisionCooldowns, BALL_RADIUS)) sfx.playBounce()
+  checkHoopScore(scratchPreviousShotPos, basketball.position)
 
   if (basketball.position.y <= BALL_RADIUS) {
     basketball.position.y = BALL_RADIUS
+    sfx.playBounce()
     // vicino al rimbalzo del palleggio automatico (BALL_BOUNCE_SPEED) ma un
     // filo più smorzato — un tiro sbagliato rimbalza come farebbe la palla
     // vera invece di fermarsi di colpo, senza però riusare la costante del
@@ -1846,7 +1943,9 @@ function updateShootAnimation(delta) {
 
     if (!shootReleased && t >= SHOOT_RELEASE_POINT) {
       getShotDirection(shotVelocity).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
+      shotWasInsideArc = isInsideThreePointArc(manipulator.root.position)
       shootReleased = true
+      sfx.playShoot()
       // NON manipulator.setState(NO_BALL) qui: farlo nello STESSO istante in
       // cui parte il volo sgancia subito la camera dalla vista libera di
       // HANDLING (isHandling in animate() diventa falso il prossimo frame),
@@ -1897,9 +1996,235 @@ function updateShootAnimation(delta) {
   }
 }
 
+// --- Main Menu ---
+// centro/quota/raggio scelti a occhio per un'inquadratura "isometrica"
+// plausibile sull'intero campo (bounding box reale del GLTF ≈
+// X:-1730..1490 Z:-1580..1890, vedi commenti sulle collisioni dei muri)
+const MENU_ORBIT_CENTER = new THREE.Vector3(-120, 0, 155)
+const MENU_ORBIT_RADIUS = 1400
+const MENU_ORBIT_HEIGHT = 900
+const MENU_ORBIT_SPEED = 0.05 // rad/s, molto lenta apposta
+let menuOrbitAngle = 0
+function updateMenuCameraOrbit(delta) {
+  menuOrbitAngle += MENU_ORBIT_SPEED * delta
+  camera.position.set(
+    MENU_ORBIT_CENTER.x + Math.cos(menuOrbitAngle) * MENU_ORBIT_RADIUS,
+    MENU_ORBIT_HEIGHT,
+    MENU_ORBIT_CENTER.z + Math.sin(menuOrbitAngle) * MENU_ORBIT_RADIUS
+  )
+  camera.lookAt(MENU_ORBIT_CENTER)
+}
+
+const menuOverlayEl = document.getElementById('menu-overlay')
+// #hint parte già nascosto via style inline nell'HTML (non qui): questa riga
+// girerebbe DOPO tutto il resto del setup di scena/robot/luci più sopra,
+// lasciando un frame (o più) in cui "Click per entrare" lampeggia visibile
+// prima di essere nascosto — nascosto da subito nel markup, nessun flash
+function showMenuScreen(id) {
+  document.querySelectorAll('.menu-screen').forEach(el => el.classList.toggle('active', el.id === id))
+}
+document.querySelectorAll('[data-goto]').forEach(el => {
+  el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
+})
+
+// OPTIONS è raggiungibile sia dal main menu (menu-main) sia dalla pausa in
+// partita (menu-pause) — il tasto indietro deve tornare da dove si è
+// entrati, non sempre allo stesso posto fisso
+let optionsReturnScreen = 'menu-main'
+document.querySelectorAll('[data-goto-options-from]').forEach(el => {
+  el.addEventListener('click', () => {
+    optionsReturnScreen = el.dataset.gotoOptionsFrom
+    showMenuScreen('menu-options')
+  })
+})
+document.getElementById('menu-options-back-btn').addEventListener('click', () => showMenuScreen(optionsReturnScreen))
+
+// --- Pausa in partita (ESC) ---
+// idempotente (guardia su mode==='menu') perché ci sono DUE modi in cui
+// arriva: (1) il keydown Escape qui sotto, se il pointer non era già
+// agganciato; (2) l'evento 'unlock' più in alto, se lo era — col pointer
+// agganciato il browser stesso intercetta Esc per sganciarlo PRIMA che il
+// keydown arrivi alla pagina (comportamento nativo della Pointer Lock API,
+// non evitabile): la prima pressione sganciava solo il pointer (mostrando
+// il vecchio hint "Click per entrare"), la pausa vera scattava solo alla
+// seconda pressione. Aprirla anche da 'unlock' copre il caso mancante
+function openPauseMenu() {
+  if (mode === 'menu') return
+  mode = 'menu'
+  menuOverlayEl.style.display = 'flex'
+  showMenuScreen('menu-pause')
+  hint.style.display = 'none' // sovrascrive quanto fatto da 'unlock' (vedi sopra) — c'è un vero menu ora
+}
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Escape' || (mode !== 'play' && mode !== 'spectate')) return
+  if (controls.isLocked) controls.unlock() // farà scattare anche il listener 'unlock' sopra, openPauseMenu() è idempotente
+  else openPauseMenu()
+})
+document.getElementById('menu-back-to-main-btn').addEventListener('click', () => {
+  // reset: punteggio a zero e ritorno all'inizio del flusso di scelta —
+  // gameMode/timeOfDay restano quelli scelti l'ultima volta (li si può
+  // ricambiare rifacendo il flusso, non serve azzerarli anche loro)
+  addScore(-score)
+  showMenuScreen('menu-main')
+})
+
+// comune a START (primo ingresso) e BACK TO GAME (ripresa da pausa): nasconde
+// l'overlay ed entra in 'play'. Il primo ingresso ha in più dashPanel/
+// crosshair da smostrare una tantum (nascosti di default nell'HTML finché
+// non si è mai entrati in play) — la pausa non li tocca mai, restano già
+// visibili da quando sono stati sbloccati la prima volta.
+// controls.lock() diretto (non più "Click per entrare" a schermo): il
+// click sul bottone STESSO è già il gesto utente richiesto dalla Pointer
+// Lock API, non serve un secondo click sul canvas — l'evento 'lock' che
+// scatta nasconde #hint da solo (vedi il listener più in alto)
+function enterPlayMode() {
+  menuOverlayEl.style.display = 'none'
+  mode = 'play'
+  modeIndicator.textContent = `MODE: ${mode.toUpperCase()}`
+  controls.lock()
+}
+// funzione a parte (non solo dentro il listener) perché servirà anche da
+// altre varianti più avanti (es. altri punti d'ingresso alla pausa)
+function resumeGame() {
+  enterPlayMode()
+}
+document.getElementById('menu-back-to-game-btn').addEventListener('click', resumeGame)
+
+// solo PRACTICE ha data-gamemode (1V1/3V3 sono bottoni disabled senza
+// l'attributo, questo querySelectorAll non li include nemmeno) — nessun
+// ramo per "quale gamemode" serve finché ce n'è solo una vera
+document.querySelectorAll('[data-gamemode]').forEach(el => {
+  el.addEventListener('click', () => {
+    gameMode = GameMode.PRACTICE
+    showMenuScreen('menu-robot')
+  })
+})
+
+document.querySelectorAll('[data-robot]').forEach(el => {
+  // solo MANIPULATOR è selezionabile per ora (le altre card non hanno
+  // data-robot, quindi questo querySelectorAll non le include nemmeno)
+  el.addEventListener('click', () => showMenuScreen('menu-timeofday'))
+})
+
+const timeOfDayCards = document.querySelectorAll('[data-timeofday]')
+const menuStartBtn = document.getElementById('menu-start-btn')
+timeOfDayCards.forEach(el => {
+  el.addEventListener('click', () => {
+    // solo scelta + preview (camera ancora in orbita isometrica, mode
+    // resta 'menu') — niente cambio di schermata: il tasto START compare
+    // sotto le card, nella STESSA schermata, non se ne apre un'altra
+    const timeMap = { sunrise: TimeOfDay.SUNRISE, day: TimeOfDay.DAY, sunset: TimeOfDay.SUNSET, night: TimeOfDay.NIGHT }
+    timeOfDay = timeMap[el.dataset.timeofday]
+    applyTimeOfDayPreset(timeOfDay)
+    timeOfDayCards.forEach(card => card.classList.toggle('selected', card === el))
+    menuStartBtn.classList.remove('hidden')
+  })
+})
+
+document.getElementById('menu-start-btn').addEventListener('click', () => {
+  // dashPanel/crosshair: nascosti di default nell'HTML finché non si entra
+  // MAI in play — smostrati una tantum qui, la pausa/ripresa successive
+  // (enterPlayMode/resumeGame) non li toccano più, restano già sbloccati
+  dashPanel.classList.remove('hidden')
+  crosshair.classList.remove('hidden')
+  enterPlayMode()
+})
+
+// --- Main Menu: Options (grafica) ---
+document.getElementById('opt-ssao').addEventListener('change', e => { ssaoPass.enabled = e.target.checked })
+document.getElementById('opt-shadows').addEventListener('change', e => {
+  // renderer.shadowMap.enabled da solo non basta: gli shader dei materiali
+  // già compilati con lo shadow branch attivo restano "congelati" com'erano
+  // (gotcha noto di three.js) — serve anche spegnere castShadow sulla luce
+  // vera e forzare la ricompilazione di ogni materiale in scena
+  const enabled = e.target.checked
+  renderer.shadowMap.enabled = enabled
+  sun.castShadow = enabled
+  scene.traverse(obj => {
+    if (!obj.material) return
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material]
+    materials.forEach(m => { m.needsUpdate = true })
+  })
+})
+document.getElementById('opt-volume').addEventListener('input', e => { sfx.setMasterVolume(Number(e.target.value)) })
+document.getElementById('opt-fov').addEventListener('input', e => {
+  camera.fov = Number(e.target.value)
+  camera.updateProjectionMatrix()
+})
+
+// --- Main Menu: anteprima robot live (card MANIPULATOR) ---
+// stessa tecnica di isometric_racer (src/ui/carPreview.js, vedi README):
+// renderer offscreen condiviso, camera inquadrata sul bounding box reale
+// del modello (non una foto/asset statico — il robot è procedurale, non
+// ha senso avere uno screenshot pre-fatto), un render singolo convertito
+// in PNG e inserito come <img> nella card. Nessuna rotazione continua.
+function renderRobotCardPreview() {
+  const previewSize = 200
+  const previewRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true })
+  previewRenderer.setSize(previewSize, previewSize)
+  previewRenderer.setPixelRatio(1)
+  previewRenderer.outputColorSpace = THREE.SRGBColorSpace
+  previewRenderer.toneMapping = THREE.ACESFilmicToneMapping
+
+  const previewScene = new THREE.Scene()
+  previewScene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.2))
+  const previewKeyLight = new THREE.DirectionalLight(0xffffff, 1.8)
+  previewKeyLight.position.set(1, 1.2, 1)
+  previewScene.add(previewKeyLight)
+
+  const previewCamera = new THREE.PerspectiveCamera(35, 1, 1, 10000)
+
+  const previewRobot = new ManipulatorRobot()
+  previewRobot.controls.manipulatorScale(45)
+  previewScene.add(previewRobot.root)
+
+  // inquadra il bounding box reale: distanza minima per contenere tutti
+  // gli 8 angoli nel frustum, vista di 3/4 leggermente dall'alto
+  const box = new THREE.Box3().setFromObject(previewRobot.root)
+  const center = box.getCenter(new THREE.Vector3())
+  const viewDir = new THREE.Vector3(0.9, 0.55, 1).normalize()
+  const halfFovRad = THREE.MathUtils.degToRad(previewCamera.fov / 2)
+  let maxDist = 0
+  const corner = new THREE.Vector3()
+  for (let i = 0; i < 8; i++) {
+    corner.set(
+      i & 1 ? box.max.x : box.min.x,
+      i & 2 ? box.max.y : box.min.y,
+      i & 4 ? box.max.z : box.min.z
+    ).sub(center)
+    const alongView = corner.dot(viewDir)
+    const perp = Math.sqrt(Math.max(corner.lengthSq() - alongView * alongView, 0))
+    const distForCorner = perp / Math.tan(halfFovRad) - alongView
+    if (distForCorner > maxDist) maxDist = distForCorner
+  }
+  const distance = maxDist * 1.08 // 8% di margine
+  previewCamera.position.copy(center).addScaledVector(viewDir, distance)
+  previewCamera.lookAt(center)
+
+  previewRenderer.render(previewScene, previewCamera)
+  const dataUrl = previewRenderer.domElement.toDataURL('image/png')
+
+  const img = document.createElement('img')
+  img.src = dataUrl
+  document.getElementById('robot-preview-manipulator').replaceChildren(img)
+
+  // pulizia: la scena offscreen non serve più dopo lo snapshot
+  previewRenderer.dispose()
+}
+renderRobotCardPreview()
+
 function animate() {
   requestAnimationFrame(animate)
   const delta = Math.min(clock.getDelta(), 0.1)
+
+  // mentre il main menu è aperto: solo l'orbita lenta della camera, niente
+  // altro (palleggio/fisica/input di gioco fermi, il campo è "vuoto" per
+  // costruzione in questa fase) — poi esce subito, non gira il resto del loop
+  if (mode === 'menu') {
+    updateMenuCameraOrbit(delta)
+    composer.render()
+    return
+  }
 
   if (mode === 'spectate' && controls.isLocked) {
     const speed = 300 * delta

@@ -18,12 +18,13 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 
 ## Robot Classes
 
-| Classe | Locomozione | Caratteristica | Mossa Speciale |
+Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (mai implementato):
+
+| Classe | Locomozione | Mossa Speciale | Stato |
 |---|---|---|---|
-| **MANIPULATOR** | Ruote | Bilanciato | — |
-| **COLOSSUS** | Umanoide tozzo | Rimbalzo / Block | Slam Dunk (vale doppio) |
-| **GLITCH** | Snello / asimmetrico | Velocità / Dribbling | Overclock (5s inarrestabile) |
-| **SENTINEL** | Torretta / traliccio | Tiro puro | Lock-on (tiro garantito) |
+| **MANIPULATOR** | Ruote | — | ✅ Implementata (Step 4), unica giocabile |
+| **LEGGED MANIPULATOR** | Gambe | Jump | ⬜ Placeholder nel Main Menu, da fare (Section 4) |
+| **DRONE** | Volo | Uplifting | ⬜ Placeholder nel Main Menu, da fare (Section 4) |
 
 ---
 
@@ -40,7 +41,7 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td><b>4 — Basic Playable Robot</b></td><td>MANIPULATOR: modello gerarchico procedurale, debug menu, movimento/sterzata/mira/dash in Play mode. Solo questa classe — altre 3 da fare</td></tr>
 <tr><td>✅</td><td><b>5 — Basic Basketball</b></td><td>Pallone GLTF dedicato (color + normal + metallic/roughness map) e palleggio animato: macchina a stati push/drop/rise a timestep fisso, sincronizzata con la cinematica del braccio</td></tr>
 <tr><td>✅</td><td><b>6 — Primo Polishing & Riallineamento</b></td><td>Scouting comparativo di 7 repo del corso, texture procedurali PBR sul robot, pulizia dead code</td></tr>
-<tr><td>⬜</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche ✅, pick-up/handling a bottone ✅, Shooting System (direzione da crosshair + forza costante, animazione windup/release/recover) ✅, collisioni backboard/ferro/muri/pali/panchine/tribuna ✅ (mesh reali del GLTF), pickup automatico della palla libera ✅, preview di traiettoria ✅ — Point System ancora da fare</td></tr>
+<tr><td>✅</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche ✅, pick-up/handling a bottone ✅, Shooting System (direzione da crosshair + forza costante + hoop assist da stat SHOOTING) ✅, collisioni backboard/ferro/muri/pali/panchine/tribuna ✅ (mesh reali del GLTF, ora in <code>CollisionWorld</code>), pickup automatico ✅, preview di traiettoria ✅, Point System (HUD punteggio 2/3pt) ✅, Effetti Sonori (<code>SoundEffects</code>, Web Audio sintetizzato) ✅, Main Menu completo (gamemode/robot/time-of-day, pausa, options) ✅, FSM <code>GameMode</code>/<code>TimeOfDay</code> ✅</td></tr>
 <tr><td>⬜</td><td><b>Section 3 — Enemies & Polish</b></td><td>Enemies 3v3 con AI, Steal/Block, personalizzazione menu, animation tweaks, rework Main Menu/HUD, secondo polishing e allineamento con esame</td></tr>
 <tr><td>⬜</td><td><b>Section 4 — Nuove Classi & Game Modes</b></td><td>Classe Drone (mossa "Uplifting"), Classe Legged Manipulator (mossa "Jump"), selettore Sunrise/Day/Sunset/Night, altre impostazioni globali, modalità di gioco (3v3 normale, beat the time, beat the score), polish finale</td></tr>
 <tr><td>⬜</td><td><b>Section 5 — Revisione Finale</b></td><td>Revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
@@ -64,6 +65,7 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>Play: tasto destro tenuto (solo se si ha la palla)</td><td><code>RobotState.HANDLING</code> — palleggio in pausa, camera a orientamento libero per mirare; non fa nulla se la palla è libera (<code>BallState.FREE</code>)</td></tr>
 <tr><td>Play: click sinistro (in HANDLING)</td><td>Tiro — direzione dal raycast sul crosshair, forza costante (ridotta dentro l'arco dei 3 punti), animazione windup/release/recover</td></tr>
 <tr><td>Play: camminare vicino a una palla libera</td><td>Pickup automatico (nessun tasto) — appena il bounding box del robot tocca la palla, animazione di raccolta rapida e si torna a <code>DRIBBLE</code></td></tr>
+<tr><td><b>ESC</b> (in Play)</td><td>Apre il menu di pausa (freeza il gioco): OPTIONS / BACK TO GAME / BACK TO MAIN MENU (resetta il punteggio)</td></tr>
 </tbody>
 </table>
 
@@ -103,10 +105,12 @@ Partita di basket simulata tra robot procedurali selezionabili, ambientata in un
 <tr><td>✅</td><td>Section 2: collisioni backboard/ferro/muri/pali/panchine/tribuna — sfera-vs-AABB e sfera-vs-toro, coordinate reali dagli accessor del GLTF (non stimate), restituzione tarata per oggetto</td></tr>
 <tr><td>✅</td><td>Section 2: <code>Basketball</code> (<code>src/Basketball.js</code>) — wrapper con FSM <code>HANDLED</code>/<code>FREE</code>; pickup automatico della palla libera (bounding box del robot, animazione di raccolta breve, nessun tasto)</td></tr>
 <tr><td>✅</td><td>Section 2: preview di traiettoria durante la mira (tubo 3D, nero→blu/verde in base a cosa colpisce, ferma al primo tocco col pavimento)</td></tr>
-<tr><td>⬜</td><td>Section 2: HUD/carica della forza di tiro (per ora costante, dipendente solo dalla zona campo)</td></tr>
-<tr><td>⬜</td><td>Section 2: Point System, overlay HUD e/o texture fisiche in scena (canestro rilevato in console, nessuna UI ancora)</td></tr>
-<tr><td>⬜</td><td>Effetti sonori — nessuno ancora; vedi "Effetti Sonori negli Altri Progetti" più sotto per l'approccio scelto (<code>THREE.Audio</code>/<code>AudioListener</code>), da implementare</td></tr>
-<tr><td>⬜</td><td>FSM <code>GameMode</code> (PRACTICE/1v1/3v3) e FSM <code>TimeOfDay</code> (Sunrise/Day/Sunset/Night) — richieste, ancora da creare (solo valori enum, nessun comportamento)</td></tr>
+<tr><td>⬜</td><td>Section 2: HUD/carica della forza di tiro — deciso esplicitamente di NON farla variabile (cambierebbe la traiettoria mentre si mira, già difficile così); la stat SHOOTING corregge la traiettoria vicino al canestro invece ("hoop assist", ✅ fatto) al posto di una forza a carica</td></tr>
+<tr><td>✅</td><td>Section 2: Point System — HUD punteggio (<code>#scoreboard</code>, stile thehollowzone), 2/3 punti in base a dentro/fuori l'arco dei 3 punti catturato al rilascio, canestro rilevato con interpolazione esatta del punto di attraversamento (<code>isHoopCrossing</code>)</td></tr>
+<tr><td>✅</td><td>Effetti sonori — <code>SoundEffects</code> (<code>src/SoundEffects.js</code>): <code>AudioListener</code> + 3 suoni sintetizzati via Web Audio (canestro, rimbalzo, tiro), zero asset esterni scaricati</td></tr>
+<tr><td>✅</td><td>FSM <code>GameMode</code> (PRACTICE/1v1/3v3) e FSM <code>TimeOfDay</code> (Sunrise/Day/Sunset/Night) — selezionabili dal Main Menu, <code>TimeOfDay</code> collegato a preset reali di luci/sfondo/faretti canestro</td></tr>
+<tr><td>✅</td><td>Main Menu completo — GAMEMODES → ROBOT (preview 3D live) → TIME OF DAY + START, pausa in-game (ESC) con OPTIONS/BACK TO GAME/BACK TO MAIN MENU</td></tr>
+<tr><td>✅</td><td>Refactor: <code>SoundEffects</code>/<code>CollisionWorld</code> — audio e collisioni ambientali raccolti in classi wrapper (stesso pattern di <code>RobotBase</code>/<code>Basketball</code>) invece di funzioni/variabili sciolte a livello di modulo in <code>main.js</code></td></tr>
 <tr><td>⬜</td><td>Section 3: Enemies (3v3) — AI e differenziazioni tra classi avversarie</td></tr>
 <tr><td>⬜</td><td>Section 3: personalizzazione menu colori</td></tr>
 <tr><td>⬜</td><td>Section 3: interazioni e stati aggiuntivi — "Steal"</td></tr>
@@ -260,11 +264,25 @@ Lo Shooting System (`RobotState.NO_BALL`, animazione windup/release/recover, col
 | 14 | Un tiro veloce contro la backboard **ogni tanto** passava attraverso senza rimbalzare | Tunneling classico: a `SHOT_SPEED`~1100 unità/s un frame intero (delta variabile, 16-30ms) sposta la palla di 18-33 unità — più dello spessore del pannello (`BACKBOARD_HALF_THICKNESS×2` = 8 unità) — la palla "salta" da un lato all'altro del pannello senza mai risultare "dentro" durante il check | `updateShotFlight` suddivisa in sotto-passi a timestep fisso (`SHOT_PHYSICS_SUBSTEP_DT = 1/240`), spostamento massimo per sotto-passo sotto le 5 unità |
 | 15 | Le collisioni dei muri hanno richiesto **tre tentativi**: prima un box preso dal bordo del campo dipinto (`floor_court`, troppo vicino — è ancora bordocampo calpestabile), poi il bounding box di tutto il sottoalbero `walls` del GLTF (troppo lontano — includeva le tribune profonde, la palla non ci arrivava mai), poi un rettangolo per lato preso dal materiale `floor` (posizione giusta ma con buchi nei punti dove i pannelli reali non coprivano tutto lo span) | Il vero confine non è un rettangolo semplice: sono **66 mesh reali** distinte nel sottoalbero `walls` (pannelli verticali + gradoni di tribuna a Y crescente), con spazi vuoti intenzionali tra loro (pattern architettonico) | Estratte tutte le 66 mesh una per una (bounding box world-space dagli accessor GLTF, script Node dedicato), incollate come array statico di `THREE.Box3` — nessuna approssimazione aggregata |
 
+### Main Menu, Point System, Hoop Assist ed Effetti Sonori (Section 2, seconda parte)
+
+| # | Problema | Causa | Soluzione |
+|---|---|---|---|
+| 1 | Il menu principale non spariva dopo aver scelto la fase del giorno | `menuOverlayEl.classList.add('hidden')` non aveva alcun effetto: la regola CSS sull'ID `#menu-overlay` (`display: flex`) ha specificità più alta della classe `.hidden` (`display: none`) | Impostato `menuOverlayEl.style.display` direttamente via JS invece di alternare la classe |
+| 2 | In gioco, premendo ESC si tornava prima alla schermata "Click per entrare" e serviva una **seconda** pressione per aprire davvero il menu di pausa | Col puntatore lockato, il **browser** intercetta ESC per sbloccarlo PRIMA che l'evento arrivi al `keydown` handler della pagina — la prima pressione sblocca soltanto, la seconda (ora sbloccato) raggiunge finalmente il handler | Aggiunta l'apertura del menu di pausa anche sull'evento `unlock` di `PointerLockControls` (idempotente), con un flag `suppressPauseOnUnlock` per non farla scattare quando è il tasto M a sbloccare esplicitamente |
+| 3 | L'hint "Click per entrare" lampeggiava visibilmente per un frame al caricamento della pagina, nonostante non dovesse più esistere come step | `hint.style.display = 'none'` veniva eseguito troppo tardi nell'esecuzione del modulo (dopo tutto il setup sincrono di scena/robot/luci), lasciando una finestra di uno o più frame visibili | Stato nascosto spostato direttamente nell'HTML: `<div id="hint" style="display:none">` |
+| 4 | Disattivare le ombre da OPTIONS non le rimuoveva, le "congelava" nell'ultimo stato | `renderer.shadowMap.enabled = false` da solo non forza retroattivamente i materiali già compilati a rimuovere il loro shadow-path — gotcha noto di three.js | Aggiunto anche `sun.castShadow = enabled` + `material.needsUpdate = true` su tutta la scena (`scene.traverse`) |
+| 5 | **Il campo intero smetteva di essere renderizzato** dopo una modifica ai faretti canestro | Durante un refactor del materiale dei faretti, la dichiarazione `const poleMetalMaps = createProceduralPBRMaps(...)` era stata accidentalmente cancellata, ma la variabile restava referenziata più sotto (nel callback async del `GLTFLoader`, per il materiale dell'asta del lampione) — `ReferenceError` che crashava il callback prima di `scene.add(gltf.scene)` | Re-individuato con `grep -c` (il conteggio della dichiarazione risultava 0, mentre `node --check`/`npm run build` restavano puliti: controllano solo la sintassi, non la risoluzione dei riferimenti runtime dentro un callback) — dichiarazione ripristinata con un commento di avviso esplicito |
+| 6 | Dopo un rimbalzo, a volte la palla attraversava la backboard (o parte del ferro) invece di rimbalzarci contro | Un unico timer di cooldown globale sospendeva **tutte** le collisioni per 0.3s dopo un rimbalzo qualsiasi — un rimbalzo sul ferro seguito a ruota da un volo verso la backboard attraversava quest'ultima senza mai risultare in collisione | Cooldown per-oggetto (`Map<collidable, secondiResidui>`, non un timer unico); volo reale e preview di traiettoria usano mappe separate (la preview non deve "consumare" il cooldown di un oggetto reale mentre si sta solo mirando) |
+| 7 | Molte collisioni segnavano "dentro" (verde) nella preview per tiri che in realtà toccavano il ferro e rimbalzavano via | `HOOP_DETECTION_RADIUS` (35, primo tentativo) era più largo del vero spazio fisicamente libero (`RIM_RING_RADIUS - RIM_TUBE_RADIUS - BALL_RADIUS = 21`) | Ridotto al valore geometrico più stretto (poi affinato ulteriormente, vedi #9) |
+| 8 | Il canestro con statistica SHOOTING alta, da vicino, a volte **peggiorava** il tiro invece di aiutarlo (la palla veniva sparata oltre il centro) | Il primo hoop-assist era un'accelerazione sulla velocità, che si accumula con quanto tempo la palla passa nel cono d'assistenza — un tiro lento/da vicino passa più tempo nel cono, accumulando una spinta eccessiva | Sostituito con una correzione di **posizione** (`pull = min(strength * dist/coneRadius * rate * dt, 1)`, clampata a 1): non può mai superare il centro del canestro qualunque sia il tempo di permanenza |
+| 9 | Nonostante il fix del cooldown per-oggetto, tiri che entravano chiaramente nel canestro continuavano a non dare né punteggio né linea verde in preview, specialmente da vicino | Due cause sommate: (a) `isHoopCrossing` testava solo la posizione **dopo** il passo di simulazione, non il punto esatto di attraversamento — con un passo di campionamento grezzo (preview) la palla poteva "saltare oltre" la stretta finestra del canestro proprio nell'istante vero del passaggio; (b) `HOOP_DETECTION_RADIUS` non aveva alcun margine di tolleranza (un tiro può sfiorare l'interno del ferro ed entrare comunque, non ogni tocco fa rimbalzare via) | `isHoopCrossing(previousPos, position, hoop)` ora **interpola** linearmente il punto esatto di attraversamento tra i due campioni invece di testare solo quello finale; `HOOP_DETECTION_RADIUS` riportato al valore geometrico esatto + 30% dello spessore del ferro di tolleranza; passo della preview (`TRAJECTORY_DT`) affinato da 0.02 a 0.005 per avvicinarsi alla risoluzione del volo reale (`SHOT_PHYSICS_SUBSTEP_DT=1/240`) |
+
 ---
 
 ## Confronto con Altri Progetti del Corso (Step 6 — Polish)
 
-Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo anche scandagliato 7 altri progetti finali dello stesso corso (stessa consegna, stessa rubrica) per confrontare approcci a librerie, modellazione, animazione, fisica e texture. A differenza dello Step 1 (8 repo analizzati all'inizio, di cui non abbiamo mai salvato i nomi — persi), stavolta teniamo il link di ognuno.
+Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo anche scandagliato altri progetti finali dello stesso corso (stessa consegna, stessa rubrica) per confrontare approcci a librerie, modellazione, animazione, fisica e texture — 7 durante lo Step 6, un ottavo (`isometric_racer`) più avanti per lo stile del main menu/selezione. A differenza dello Step 1 (8 repo analizzati all'inizio, di cui non abbiamo mai salvato i nomi — persi), stavolta teniamo il link di ognuno.
 
 | Repo | Librerie oltre three.js | Modellazione | Animazione | Fisica | Texture | Rischio compliance |
 |---|---|---|---|---|---|---|
@@ -275,6 +293,7 @@ Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo 
 | [interactivelan](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-interactivelan) | simplex-noise (solo terreno) | GLTF rigged importato (Blender) | 100% imperativo, delta variabile | A* pathfinding + raycasting a mano | PBR completa (5 mappe) | Medio — modelli importati, niente lib di animazione |
 | [thehollowzone](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-thehollowzone) | tween.js (installata, mai usata) | Procedurale, gerarchia profonda per-arto | 100% imperativo, pattern reset+delta | AABB/cerchio a mano, no accumulator | PBR completa (4 mappe) | Basso — solo dipendenza morta |
 | [robot_factory](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-robot_factory) | nessuna, no bundler | Procedurale puro, il più profondo (braccio 7 giunti) | 100% imperativo | Mass-spring cable scritto a mano (Eulero) | `CanvasTexture` proceduali (bump+roughness) | Nessuno apparente — il più "pulito" |
+| [isometric_racer](https://github.com/SapienzaInteractiveGraphicsCourse/final-project-isometric_racer) | nessuna, no bundler (`"three": "0.160.0"` locale in `libs/`) | GLB importati (auto: Dodge/Lamborghini/Nissan; tracciati GLTF+bin) | 100% imperativo, ruote animate a mano (gruppi "steer"+"roll" annidati) | Interamente a mano (`src/vehicle/physics.js`): sterzo per accumulo d'angolo, raycast verticale per aderenza al terreno con tilt via quaternioni, grip differenziato per materiale (erba/asfalto/boost pad), 3 raycaster orizzontali per collisioni con rimbalzo | Numerose, scaricate nei GLTF (baseColor+normal+metallicRoughness+specularF0 sul tracciato più completo); unica proceduraie: la scacchiera del traguardo via `CanvasTexture` | Basso — fisica veicolo e animazione ruote interamente scritte a mano, nessuna libreria |
 | **(il nostro)** | nessuna | Procedurale puro (3R + ruote) | 100% imperativo, timestep fisso (unici a farlo) | State machine a timestep fisso | Pallone: color+normal+metallic-roughness; campo: solo color | Basso |
 
 ### Cosa abbiamo imparato
@@ -285,6 +304,16 @@ Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo 
 - **Siamo gli unici con un post-processing pipeline** (SSAO+SMAA) — nessun altro repo ha un `EffectComposer`.
 - **Sulle texture eravamo indietro, ora recuperato in parte**: tutti gli altri hanno set PBR completi (normal+roughness+AO, spesso 4-6 mappe) sui loro asset principali, quasi sempre **scaricati** da librerie di texture gratuite (nomi/risoluzioni tipiche di ambientCG/Poliigon). **Unica eccezione: `robot_factory`** (il progetto più simile al nostro per filosofia) genera le texture proceduralmente via `CanvasTexture`, senza asset esterni — abbiamo seguito lo stesso approccio per le texture del robot (normal map + roughness map generate in codice via height-field→gradiente, vedi `src/robots/manipulator.js`), invece di scaricare texture pronte come fa la maggioranza; per campo/pallone (già asset esterni non nostri) resta aperta l'opzione di scaricare qualcosa in futuro se necessario.
 - **GUI/debug**: `dat.GUI` compare una sola volta su 7 (a-space-odyssey); nessuno usa `lil-gui`; gli altri 6 (incluso `thehollowzone`) non hanno nessuna libreria GUI né un pannello debug visibile nel codice. Il nostro pannello fatto a mano non è un'anomalia, anzi è più elaborato della media.
+- **`isometric_racer`** (analizzato a parte, dopo lo Step 6, per il main menu): la sua card di selezione auto renderizza un **thumbnail 3D live** con un renderer offscreen condiviso, camera inquadrata sul bounding box reale del modello (8 angoli proiettati nel frustum per la distanza minima che li contiene tutti), un render singolo convertito in PNG (`toDataURL`) e incollato come `<img>` — tecnica ripresa identica per la card MANIPULATOR del nostro main menu (`renderRobotCardPreview` in `src/main.js`), dato che anche i nostri robot sono procedurali e non ha senso avere uno screenshot statico pre-fatto. Fisica veicolo (sterzo, aderenza al suolo via raycast, grip per materiale, collisioni con rimbalzo) interamente scritta a mano in `src/vehicle/physics.js`, nessun motore esterno — stesso spirito "zero librerie" della maggioranza scandagliata.
+
+### Spunti per Enemy AI (Section 3, ricerca preliminare)
+
+Nessuna implementazione ancora — ricerca mirata (non parte dello scouting Step 6 originale) fatta su `interactivelan` e `thehollowzone` per capire come gestiscono navigazione/AI dei nemici, in vista del multiplayer 3v3 di Section 3.
+
+| Repo | Approccio | Perché vale la pena |
+|---|---|---|
+| `interactivelan` (`src/core/navigation.js`) | A* vero su una griglia derivata dall'heightmap del terreno: `openSet`/`closedSet`, `gCost`/`fCost`/`cameFrom`, vicini a 8 direzioni con prevenzione del taglio d'angolo in diagonale, euristica euclidea; i nemici chiamano `findPath(start, goal)` una volta e seguono i waypoint restituiti | Implementazione solida e da manuale se vogliamo pathfinding vero multi-waypoint attorno agli ostacoli fissi del campo |
+| `thehollowzone` (`src/systems/navigation.js`) | Nessuna griglia/grafo: gli zombie testano una linea diretta verso il giocatore (`segmentIntersectsBox`, sfera-vs-AABB); solo se bloccata generano waypoint d'aggiramento attorno al box che blocca (`chooseNavigationWaypoint()`), scorendo 8 candidati per distanza + una memoria di preferenza di lato (evita oscillazioni sinistra-destra), 2 waypoint di deviazione | Riusa esattamente le stesse primitive che abbiamo già in `CollisionWorld` (sfera-vs-AABB) invece di costruire un nav-grid separato — integrazione molto più economica della A* completa per un campo con pochi ostacoli fissi come il nostro |
 
 ### Tecniche UI da riprendere (da `thehollowzone`)
 
@@ -318,7 +347,7 @@ Le due FSM (`RobotState` del robot, `BallState` della palla) sono tenute in sinc
 
 ### Effetti Sonori negli Altri Progetti
 
-Nessuno degli effetti sonori è ancora implementato — ricerca preliminare fatta scandagliando gli stessi 7 repo dello Step 6 per capire come li avessero gestiti, prima di scegliere un approccio.
+Ricerca preliminare fatta scandagliando gli stessi repo per capire come avessero gestito l'audio, prima di scegliere un approccio — poi implementato in `src/SoundEffects.js`.
 
 | Repo | Approccio |
 |---|---|
@@ -329,8 +358,11 @@ Nessuno degli effetti sonori è ancora implementato — ricerca preliminare fatt
 | interactivelan | `THREE.AudioListener` + `THREE.PositionalAudio` per suoni 3D spaziali (motore del mezzo, esplosioni), caricamento manuale via `decodeAudioData` |
 | thehollowzone | `new Audio()` semplice, `.cloneNode()` ad ogni play per permettere SFX sovrapposti (raffiche di colpi) senza tagliarsi a vicenda |
 | robot_factory | Nessun audio |
+| isometric_racer | `THREE.AudioLoader`→`THREE.Audio` (non `HTMLAudioElement`), sblocco al primo click/keypress (aggira l'autoplay policy dei browser), `.setLoop(true)` per le tracce di sottofondo, crossfade menu↔partita via un helper `fadeGain(audio, target, duration)` (`gain.gain.cancelScheduledValues()` + `linearRampToValueAtTime()` su 1.2s), pitch del motore agganciato alla velocità (`setPlaybackRate(0.7 + ratio*1.6)`) |
 
-Metà dei repo non ha audio (progetti "puri" simulazione/procedurali come il nostro); l'altra metà se lo costruisce a mano, nessuno usa Howler.js. **Scelta per il nostro progetto**: `THREE.Audio`/`THREE.AudioListener` via `THREE.AudioLoader` — zero dipendenze nuove (already three.js), si integra con la camera esistente, e `THREE.PositionalAudio` darebbe gratis il suono spaziale per rimbalzo palla/retina attaccato a palla/canestro. Per SFX sovrapposti (palleggio rapido), riprendere il trucco `cloneNode()` di `thehollowzone` o un piccolo pool di oggetti `THREE.Audio` invece di introdurre Howler.
+Metà dei repo non ha audio (progetti "puri" simulazione/procedurali come il nostro); l'altra metà se lo costruisce a mano, nessuno usa Howler.js. **Scelta fatta per il nostro progetto**: niente file audio esterni da scaricare (coerente con le texture procedurali del robot) — `THREE.AudioListener` sulla camera + 3 suoni **sintetizzati** via Web Audio grezzo (oscillatori + rumore bianco filtrato, non campioni caricati): `playScore()` (due toni ascendenti), `playBounce(volumeScale)` (tono grave + transiente di rumore passa-basso), `playShoot()` (rumore passa-banda con centro che sale). Incapsulati in `class SoundEffects` (`src/SoundEffects.js`).
+
+**Musica di sottofondo — ancora da fare**: `isometric_racer` è l'unico repo con vera musica in loop (non solo SFX), e il suo approccio (`THREE.Audio`, crossfade via rampa sul gain, pitch dinamico per il motore) è direttamente riusabile con lo stesso stack Web Audio già in `SoundEffects` — nessuna libreria nuova richiesta, solo aggiungere `.setLoop(true)` + un helper di crossfade quando affronteremo questo punto.
 
 ---
 

@@ -4,7 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Robot Basketball</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Oxanium:wght@500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <style>
+    :root {
+      /* palette condivisa dallo scoreboard e dal main menu (stile ispirato
+         a thehollowzone, vedi README → "Tecniche UI da riprendere"), qui
+         in arancio invece della loro palette */
+      --ui-orange: #ff8a1e;
+      --ui-orange-dim: #b35e12;
+      --ui-panel: rgba(20, 12, 4, 0.55);
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; }
     canvas { display: block; }
@@ -130,6 +141,51 @@
     }
     #dash-bar-fill.ready { background: #6ec26e; }
 
+    /* Scoreboard: angoli tagliati (clip-path) + vetro smerigliato
+       (backdrop-filter), stile ripreso da thehollowzone (vedi README) ma
+       in arancio — Point System, sempre visibile in Play */
+    @keyframes panel-arrival {
+      from { opacity: 0; transform: translateY(-12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    #scoreboard {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: var(--ui-panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+      padding: 10px 22px;
+      text-align: center;
+      pointer-events: none;
+      animation: panel-arrival 0.4s ease-out;
+    }
+    #scoreboard .label {
+      font-family: 'Oxanium', monospace;
+      font-size: 11px;
+      letter-spacing: 3px;
+      color: var(--ui-orange);
+      text-shadow: 0 0 6px rgba(255, 138, 30, 0.6);
+    }
+    #scoreboard .value {
+      font-family: 'Orbitron', monospace;
+      font-weight: 900;
+      font-size: 36px;
+      color: #fff;
+      text-shadow: 0 0 10px rgba(255, 138, 30, 0.5);
+      line-height: 1.1;
+    }
+
+    #controls-hint {
+      bottom: 90px;
+      color: var(--ui-orange);
+      font-size: 12px;
+      padding: 5px 12px;
+      font-family: 'Space Mono', monospace;
+    }
+
     #crosshair {
       position: fixed;
       top: 50%;
@@ -141,14 +197,252 @@
       pointer-events: none;
       text-shadow: 0 0 4px #000;
     }
+
+    /* --- Main Menu (stile thehollowzone: font misti, clip-path, vetro
+       smerigliato — vedi README "Tecniche UI da riprendere") --- */
+    #menu-overlay {
+      /* trasparente al centro apposta: sotto gira il campo in isometrico
+         (vedi menuCameraOrbit in main.js) — solo una vignetta ai bordi per
+         far risaltare i pannelli, non uno sfondo opaco.
+         display qui (non .hidden) perché un selettore per ID ha specificità
+         più alta di una classe: .hidden{display:none} non lo batterebbe mai
+         — nascosto/mostrato via JS con style.display direttamente */
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: radial-gradient(ellipse at center, rgba(10, 5, 2, 0.25) 0%, rgba(0, 0, 0, 0.8) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Oxanium', monospace;
+    }
+    .menu-screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+      animation: panel-arrival 0.35s ease-out;
+    }
+    .menu-screen.active { display: flex; }
+    .menu-title {
+      font-family: 'Orbitron', monospace;
+      font-weight: 900;
+      font-size: 42px;
+      color: var(--ui-orange);
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px rgba(255, 138, 30, 0.6);
+    }
+    .menu-btn-list, .menu-card-grid {
+      display: flex;
+      gap: 18px;
+    }
+    .menu-btn-list { flex-direction: column; min-width: 320px; }
+    .menu-btn {
+      background: var(--ui-panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+      color: #fff;
+      font-family: 'Oxanium', monospace;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: 2px;
+      padding: 16px 24px;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .menu-btn:hover:not(:disabled) {
+      background: rgba(255, 138, 30, 0.18);
+      box-shadow: 0 0 16px rgba(255, 138, 30, 0.35);
+    }
+    .menu-btn:disabled {
+      color: #777;
+      border-color: #444;
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    .menu-btn .tag {
+      display: block;
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--ui-orange);
+      margin-top: 4px;
+    }
+    .menu-btn:disabled .tag { color: #666; }
+    .menu-card {
+      background: var(--ui-panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+      width: 180px;
+      padding: 14px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .menu-card:hover:not(.disabled) {
+      background: rgba(255, 138, 30, 0.18);
+      box-shadow: 0 0 16px rgba(255, 138, 30, 0.35);
+    }
+    .menu-card.disabled { opacity: 0.45; cursor: not-allowed; }
+    .menu-card.selected {
+      background: rgba(255, 138, 30, 0.22);
+      border-color: var(--ui-orange);
+      box-shadow: 0 0 16px rgba(255, 138, 30, 0.45);
+    }
+    .menu-card .card-icon {
+      width: 100%;
+      height: 140px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    /* placeholder per le classi robot non ancora implementate (LEGGED
+       MANIPULATOR, DRONE) — "?" grande e smorzato invece di testo nudo */
+    .menu-card.disabled .card-icon {
+      font-family: 'Orbitron', monospace;
+      font-weight: 700;
+      font-size: 48px;
+      color: #555;
+      border: 1px dashed #444;
+    }
+    .menu-card .card-icon img { max-width: 100%; max-height: 100%; }
+    .menu-card .card-title {
+      font-family: 'Oxanium', monospace;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1px;
+      color: #fff;
+    }
+    .menu-card .card-sub {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      color: var(--ui-orange);
+      margin-top: 4px;
+    }
+    .menu-back {
+      background: none;
+      border: none;
+      color: #999;
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .menu-back:hover { color: var(--ui-orange); }
+    #menu-options .option-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: #fff;
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      min-width: 320px;
+      justify-content: space-between;
+    }
   </style>
 </head>
 <body>
-  <div id="hint">Click per entrare<br><small>WASD · Space/Shift · Mouse · P per debug · M per modalità</small></div>
+  <div id="menu-overlay">
+    <div id="menu-main" class="menu-screen active">
+      <div class="menu-title">MECHA-BASKETBALL</div>
+      <div class="menu-btn-list">
+        <button class="menu-btn" data-goto="menu-gamemodes">GAMEMODES</button>
+        <button class="menu-btn" data-goto-options-from="menu-main">OPTIONS</button>
+      </div>
+    </div>
+
+    <div id="menu-gamemodes" class="menu-screen">
+      <div class="menu-title">GAMEMODES</div>
+      <div class="menu-btn-list">
+        <button class="menu-btn" data-gamemode="practice">PRACTICE</button>
+        <button class="menu-btn" disabled>1V1<span class="tag">IN ARRIVO</span></button>
+        <button class="menu-btn" disabled>3V3<span class="tag">IN ARRIVO</span></button>
+      </div>
+      <button class="menu-back" data-goto="menu-main">← indietro</button>
+    </div>
+
+    <div id="menu-robot" class="menu-screen">
+      <div class="menu-title">SCEGLI IL ROBOT</div>
+      <div class="menu-card-grid" id="robot-card-grid">
+        <div class="menu-card" data-robot="manipulator">
+          <div class="card-icon" id="robot-preview-manipulator"></div>
+          <div class="card-title">MANIPULATOR</div>
+          <div class="card-sub">Ruote · Bilanciato</div>
+        </div>
+        <div class="menu-card disabled">
+          <div class="card-icon">?</div>
+          <div class="card-title">LEGGED MANIPULATOR</div>
+          <div class="card-sub">In arrivo</div>
+        </div>
+        <div class="menu-card disabled">
+          <div class="card-icon">?</div>
+          <div class="card-title">DRONE</div>
+          <div class="card-sub">In arrivo</div>
+        </div>
+      </div>
+      <button class="menu-back" data-goto="menu-gamemodes">← indietro</button>
+    </div>
+
+    <div id="menu-timeofday" class="menu-screen">
+      <div class="menu-title">FASE DEL GIORNO</div>
+      <div class="menu-card-grid">
+        <div class="menu-card" data-timeofday="sunrise"><div class="card-title">SUNRISE</div></div>
+        <div class="menu-card" data-timeofday="day"><div class="card-title">DAY</div></div>
+        <div class="menu-card" data-timeofday="sunset"><div class="card-title">SUNSET</div></div>
+        <div class="menu-card" data-timeofday="night"><div class="card-title">NIGHT</div></div>
+      </div>
+      <button class="menu-btn hidden" id="menu-start-btn">START</button>
+      <button class="menu-back" data-goto="menu-robot">← indietro</button>
+    </div>
+
+    <div id="menu-pause" class="menu-screen">
+      <div class="menu-title">PAUSA</div>
+      <div class="menu-btn-list">
+        <button class="menu-btn" id="menu-back-to-game-btn">BACK TO GAME</button>
+        <button class="menu-btn" data-goto-options-from="menu-pause">OPTIONS</button>
+        <button class="menu-btn" id="menu-back-to-main-btn">BACK TO MAIN MENU</button>
+      </div>
+    </div>
+
+    <div id="menu-options" class="menu-screen">
+      <div class="menu-title">OPTIONS</div>
+      <div class="option-row">
+        <span>SSAO</span>
+        <input type="checkbox" id="opt-ssao" checked />
+      </div>
+      <div class="option-row">
+        <span>Ombre</span>
+        <input type="checkbox" id="opt-shadows" checked />
+      </div>
+      <div class="option-row">
+        <span>Volume</span>
+        <input type="range" id="opt-volume" min="0" max="1" step="0.05" value="1" />
+      </div>
+      <div class="option-row">
+        <span>FOV</span>
+        <input type="range" id="opt-fov" min="60" max="100" step="1" value="75" />
+      </div>
+      <button class="menu-back" id="menu-options-back-btn">← indietro</button>
+    </div>
+  </div>
+
+  <div id="hint" style="display:none">Click per entrare<br><small>WASD · Space/Shift · Mouse · P per debug · M per modalità</small></div>
   <div id="mode-indicator" class="hud-pill">MODE: SPECTATE</div>
   <div id="dash-panel" class="hud-pill hidden">
     DASH
     <div id="dash-bar-track"><div id="dash-bar-fill"></div></div>
+  </div>
+  <div id="controls-hint" class="hud-pill">R: recupera la palla</div>
+  <div id="scoreboard">
+    <div class="label">SCORE</div>
+    <div class="value" id="score-value">0</div>
   </div>
   <div id="crosshair" class="hidden">+</div>
   <div id="debug-panel" class="hud-panel hidden">
