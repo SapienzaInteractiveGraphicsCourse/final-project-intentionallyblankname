@@ -10,7 +10,7 @@ import * as THREE from 'three'
 //    (differenza coi pixel vicini, wrap ai bordi per un tiling seamless);
 //    3) la roughness map usa lo stesso height-field (i graffi/rilievi sono
 //    leggermente più lucidi) più rumore casuale per una variazione organica.
-function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, roughnessVariation }) {
+export function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, roughnessVariation }) {
   const heightCanvas = document.createElement('canvas')
   heightCanvas.width = heightCanvas.height = size
   const hctx = heightCanvas.getContext('2d')
@@ -62,16 +62,23 @@ function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, r
 
   const normalMap = new THREE.CanvasTexture(normalCanvas)
   const roughnessMap = new THREE.CanvasTexture(roughCanvas)
+  // l'height-field grezzo (heightCanvas), esposto anche come bumpMap: un
+  // termine di shading complementare alla normal map, economico, per un
+  // rilievo micro-superficie extra su materiali che non l'avevano ancora
+  // (panchine/palo lampione in main.js)
+  const heightMap = new THREE.CanvasTexture(heightCanvas)
   normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping
   roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping
+  heightMap.wrapS = heightMap.wrapT = THREE.RepeatWrapping
   normalMap.repeat.set(4, 4)
   roughnessMap.repeat.set(4, 4)
-  return { normalMap, roughnessMap }
+  heightMap.repeat.set(4, 4)
+  return { normalMap, roughnessMap, heightMap }
 }
 
 // pattern "metallo spazzolato": righe sottili quasi orizzontali, luminosità
 // e spessore casuali — per bodyMat/armMat (chassis, braccio, giunti)
-function drawBrushedMetal(ctx, size, count = 400) {
+export function drawBrushedMetal(ctx, size, count = 400) {
   for (let i = 0; i < count; i++) {
     const y = Math.random() * size
     const bright = 128 + (Math.random() - 0.5) * 18
@@ -86,7 +93,7 @@ function drawBrushedMetal(ctx, size, count = 400) {
 
 // pattern "grana gomma/plastica": puntini sparsi di dimensione e luminosità
 // variabili — per wheelMat (gomma ruote) e accentMat (plastica paletta)
-function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
+export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
   for (let i = 0; i < count; i++) {
     const x = Math.random() * size, y = Math.random() * size
     const r = 1 + Math.random() * maxRadius
@@ -277,6 +284,14 @@ export function createManipulatorRobot() {
   // non eredita l'apertura a V di una sola delle due)
   const paddleCenter = new THREE.Object3D()
   paddleGroup.add(paddleCenter)
+  // secondo punto di aggancio, SOLO per HANDLING/tiro in main.js (il
+  // palleggio automatico continua a usare paddleCenter sopra, invariato):
+  // non il centro "piatto" delle due metà, ma il punto in cui le loro
+  // normali, estruse, si incontrano — dove una palla incastrata nella V
+  // toccherebbe davvero entrambe le facce. Vedi updatePaddleCenter() sotto
+  // per la derivazione geometrica
+  const ballRestPoint = new THREE.Object3D()
+  paddleGroup.add(ballRestPoint)
   // offset di chiusura extra sopra paddleAngle (che resta "forma", tracciata
   // in state e nel Copy Config) — usato dalla presa HANDLING in main.js per
   // stringere la V senza toccare la configurazione salvata, stesso principio
@@ -285,6 +300,11 @@ export function createManipulatorRobot() {
   function effectivePaddleAngle() {
     return Math.max(state.paddleAngle - gripOffset, 0)
   }
+  // tiro (main.js): apre la V verso l'alto/orizzontale invece che verso il
+  // basso durante il rilascio — offset sommato SOPRA state.paddleTilt (che
+  // resta la "forma"/baseline di presa tracciata in state e Copy Config),
+  // stesso principio di gripOffset qui sopra
+  let shootTiltOffset = 0
   // ATTENZIONE: paddleWidth/2 sarebbe la Z solo ad angolo=0 (palette
   // piatte). Ogni metà è ruotata di ±angolo/2 attorno al bordo comune
   // (Z=0): il suo punto medio (Z=paddleWidth/2 nel proprio frame non
@@ -293,8 +313,25 @@ export function createManipulatorRobot() {
   // bordo invece di restare alla distanza nominale. Senza questo, con
   // angolo vicino al massimo il punto di tracking finiva ben oltre la
   // superficie vera della paletta (palla "staccata")
+  // extra distanza (mondo, sommata oltre il punto geometrico) lungo la
+  // stessa direzione locale Z — il punto di convergenza esatto è corretto
+  // "di luogo" ma visivamente troppo vicino alla camera/al polso, questo lo
+  // spinge oltre. Regolabile da main.js (setBallRestOffset), non tracciata
+  // in state/Copy Config: è una correzione percettiva, non la "forma"
+  let ballRestExtraOffset = 0
   function updatePaddleCenter() {
-    paddleCenter.position.set(0, 0, (paddleWidth / 2) * Math.cos(effectivePaddleAngle() / 2))
+    const halfAngle = effectivePaddleAngle() / 2
+    const d = paddleWidth / 2
+    paddleCenter.position.set(0, 0, d * Math.cos(halfAngle))
+    // le due metà sono ruotate di ±halfAngle attorno alla cerniera comune
+    // (Z=0 nel frame di paddleGroup): per simmetria (specchiate su Y) le
+    // loro normali si incontrano esattamente sul piano Y=0, a distanza
+    // d/cos(halfAngle) — non d·cos come sopra. Ad angolo→0 (V chiusa)
+    // 1/cos→1: torna al centro piatto, coerente (senza V non c'è
+    // convergenza da cercare). d·cos e d/cos sono la stessa quantità solo
+    // ad angolo=0; halfAngle resta ben sotto i 90° del caso degenere
+    // (PADDLE_ANGLE_MAX/2 ≈ 69°), quindi mai vicino alla singolarità
+    ballRestPoint.position.set(0, 0, d / Math.cos(halfAngle) + ballRestExtraOffset)
   }
   updatePaddleCenter()
 
@@ -308,7 +345,7 @@ export function createManipulatorRobot() {
   // basso), l'apertura a V delle due metà è un'ulteriore rotazione LOCALE
   // sopra tutto questo — resta valida indipendentemente da come punta il braccio
   function levelPaddle() {
-    paddleGroup.rotation.x = -(link1Group.rotation.x + elbow.rotation.x + WRIST_REST_PITCH) + state.paddleTilt
+    paddleGroup.rotation.x = -(link1Group.rotation.x + elbow.rotation.x + WRIST_REST_PITCH) + state.paddleTilt + shootTiltOffset
   }
   function applyPaddleAngle() {
     const angle = effectivePaddleAngle()
@@ -457,6 +494,20 @@ export function createManipulatorRobot() {
       gripOffset = offset
       applyPaddleAngle()
     },
+    // tiro (main.js): apre la V verso l'alto/orizzontale invece che verso il
+    // basso — offset sommato sopra state.paddleTilt in levelPaddle(), la
+    // "forma"/baseline di presa (Copy Config) resta intatta
+    setShootTilt(offset) {
+      shootTiltOffset = offset
+      levelPaddle()
+    },
+    // sposta ballRestPoint (HANDLING/tiro, non paddleCenter/palleggio) più
+    // lontano dalla cerniera lungo la stessa direzione — correzione
+    // percettiva "quanto lontano dalla camera", non una nuova geometria
+    setBallRestOffset(extra) {
+      ballRestExtraOffset = extra
+      updatePaddleCenter()
+    },
     paddleAngle(a) {
       state.paddleAngle = a
       applyPaddleAngle()
@@ -484,6 +535,14 @@ export function createManipulatorRobot() {
     return { ...state }
   }
 
+  // updateHandling in main.js legge paddleTilt ad ogni frame solo per
+  // appiattire la paletta in HANDLING — getConfig() farebbe una clone
+  // completa dello state (usata altrove per "Copy Config") solo per un
+  // singolo campo; questo evita l'allocazione nel percorso a ogni frame
+  function getPaddleTilt() {
+    return state.paddleTilt
+  }
+
   return {
     root,
     wheelsGroup,
@@ -491,7 +550,10 @@ export function createManipulatorRobot() {
     // paddleCenter (non paddleGroup): il punto di tracking esterno deve
     // essere al centro della paletta, non sul giunto di aggancio
     paddle: paddleCenter,
+    // SOLO per HANDLING/tiro in main.js — vedi commento su ballRestPoint sopra
+    ballRestPoint,
     controls,
     getConfig,
+    getPaddleTilt,
   }
 }

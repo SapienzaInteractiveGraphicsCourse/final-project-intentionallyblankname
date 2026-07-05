@@ -22,6 +22,7 @@ function speedStatToUnitsPerSecond(speedStat) {
 export const RobotState = Object.freeze({
   DRIBBLE: 'dribble',    // palleggio automatico attivo (comportamento di default)
   HANDLING: 'handling',  // palla afferrata e ferma in mano, palleggio in pausa
+  NO_BALL: 'no_ball',    // palla appena tirata, non più in mano/palleggio finché non viene ripresa
 })
 
 export class RobotBase {
