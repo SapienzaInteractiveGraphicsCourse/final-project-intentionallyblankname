@@ -42,8 +42,8 @@ Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (ma
 <tr><td>✅</td><td><b>5 — Basic Basketball</b></td><td>Pallone GLTF dedicato (color + normal + metallic/roughness map) e palleggio animato: macchina a stati push/drop/rise a timestep fisso, sincronizzata con la cinematica del braccio</td></tr>
 <tr><td>✅</td><td><b>6 — Primo Polishing & Riallineamento</b></td><td>Scouting comparativo di 7 repo del corso, texture procedurali PBR sul robot, pulizia dead code</td></tr>
 <tr><td>✅</td><td><b>Section 2 — Gameplay Mechanics</b></td><td>Classi/statistiche ✅, pick-up/handling a bottone ✅, Shooting System (direzione da crosshair + forza costante + hoop assist da stat SHOOTING) ✅, collisioni backboard/ferro/muri/pali/panchine/tribuna ✅ (mesh reali del GLTF, ora in <code>CollisionWorld</code>), pickup automatico ✅, preview di traiettoria ✅, Point System (HUD punteggio 2/3pt) ✅, Effetti Sonori (<code>SoundEffects</code>, Web Audio sintetizzato) ✅, Main Menu completo (gamemode/robot/time-of-day, pausa, options) ✅, FSM <code>GameMode</code>/<code>TimeOfDay</code> ✅</td></tr>
-<tr><td>⬜</td><td><b>Section 3 — Enemies & Polish</b></td><td>Enemies 3v3 con AI, Steal/Block, personalizzazione menu, animation tweaks, rework Main Menu/HUD, secondo polishing e allineamento con esame</td></tr>
-<tr><td>⬜</td><td><b>Section 4 — Nuove Classi & Game Modes</b></td><td>Classe Drone (mossa "Uplifting"), Classe Legged Manipulator (mossa "Jump"), selettore Sunrise/Day/Sunset/Night, altre impostazioni globali, modalità di gioco (3v3 normale, beat the time, beat the score), polish finale</td></tr>
+<tr><td>⬜</td><td><b>Section 3 — Enemies & Polish</b></td><td>Enemies 3v3 con AI, Steal/Block, personalizzazione menu colori, animation tweaks, secondo polishing e allineamento con esame (Main Menu/HUD rework già anticipato in Section 2)</td></tr>
+<tr><td>⬜</td><td><b>Section 4 — Nuove Classi & Game Modes</b></td><td>Classe Drone (mossa "Uplifting"), Classe Legged Manipulator (mossa "Jump"), modalità di gioco (3v3 normale, beat the time, beat the score), polish finale (selettore Sunrise/Day/Sunset/Night e impostazioni globali già anticipati in Section 2)</td></tr>
 <tr><td>⬜</td><td><b>Section 5 — Revisione Finale</b></td><td>Revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
 </tbody>
 </table>
@@ -93,43 +93,43 @@ Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (ma
 <tbody>
 <tr><td>✅</td><td>Modello gerarchico robot con animazione strutturale (MANIPULATOR)</td></tr>
 <tr><td>✅</td><td>Movimento robot controllato dall'utente (Play mode: WASD + mira mouse + dash)</td></tr>
-<tr><td>⬜</td><td>Altre 3 classi robot (COLOSSUS, GLITCH, SENTINEL)</td></tr>
+<tr><td>⬜</td><td>Altre 2 classi robot (LEGGED MANIPULATOR, DRONE — roster corretto, sostituisce COLOSSUS/GLITCH/SENTINEL mai implementate)</td></tr>
 <tr><td>✅</td><td>Pallone + palleggio animato (Step 5)</td></tr>
 <tr><td>✅</td><td>Texture di almeno due tipi diversi (pallone: color + normal + metallic/roughness map; campo: solo color map)</td></tr>
-<tr><td>⬜</td><td>Selezione robot da schermata iniziale</td></tr>
+<tr><td>✅</td><td>Selezione robot da schermata iniziale — Main Menu con 3 card (MANIPULATOR con preview 3D live, LEGGED MANIPULATOR/DRONE placeholder disabilitati, ancora da implementare)</td></tr>
 <tr><td>⬜</td><td>Perf: <code>light.shadow.autoUpdate = false</code> su sole e lampioni — le shadow map di campo/lampioni (statici) vengono ricalcolate ogni frame inutilmente (1 map 4096² + 4×6 map 512²); vanno congelate e aggiornate solo quando la scena statica cambia, ora che il robot mobile aggiunge ombre dinamiche vere</td></tr>
 <tr><td>✅</td><td>Section 2: stabilire le classi e le loro statistiche — roster corretto (MANIPULATOR/LEGGED MANIPULATOR/DRONE, non più COLOSSUS/GLITCH/SENTINEL), stats struct omogeneo <code>{ speed, power }</code> via <code>RobotBase</code>/<code>ManipulatorRobot</code> (<code>src/robots/</code>)</td></tr>
 <tr><td>✅</td><td>Section 2: Pick-up/Handling della palla come azione a bottone (tasto destro tenuto premuto, <code>RobotState.HANDLING</code>) invece del palleggio sempre attivo automatico</td></tr>
 <tr><td>✅</td><td>Section 2: interazioni tra le animazioni di dribble/handling — transizioni interpolate in entrambe le direzioni (posa braccio, presa paletta, camera posizione+rotazione)</td></tr>
-<tr><td>✅</td><td>Section 2: Shooting System — <code>RobotState.NO_BALL</code>, direzione da raycast sul crosshair, forza costante (HUD/carica ancora da fare), animazione windup/release/recover con gomito agganciato al pitch della camera</td></tr>
+<tr><td>✅</td><td>Section 2: Shooting System — <code>RobotState.NO_BALL</code>, direzione da raycast sul crosshair, forza costante, animazione windup/release/recover con gomito agganciato al pitch della camera</td></tr>
 <tr><td>✅</td><td>Section 2: collisioni backboard/ferro/muri/pali/panchine/tribuna — sfera-vs-AABB e sfera-vs-toro, coordinate reali dagli accessor del GLTF (non stimate), restituzione tarata per oggetto</td></tr>
 <tr><td>✅</td><td>Section 2: <code>Basketball</code> (<code>src/Basketball.js</code>) — wrapper con FSM <code>HANDLED</code>/<code>FREE</code>; pickup automatico della palla libera (bounding box del robot, animazione di raccolta breve, nessun tasto)</td></tr>
 <tr><td>✅</td><td>Section 2: preview di traiettoria durante la mira (tubo 3D, nero→blu/verde in base a cosa colpisce, ferma al primo tocco col pavimento)</td></tr>
-<tr><td>⬜</td><td>Section 2: HUD/carica della forza di tiro — deciso esplicitamente di NON farla variabile (cambierebbe la traiettoria mentre si mira, già difficile così); la stat SHOOTING corregge la traiettoria vicino al canestro invece ("hoop assist", ✅ fatto) al posto di una forza a carica</td></tr>
 <tr><td>✅</td><td>Section 2: Point System — HUD punteggio (<code>#scoreboard</code>, stile thehollowzone), 2/3 punti in base a dentro/fuori l'arco dei 3 punti catturato al rilascio, canestro rilevato con interpolazione esatta del punto di attraversamento (<code>isHoopCrossing</code>)</td></tr>
 <tr><td>✅</td><td>Effetti sonori — <code>SoundEffects</code> (<code>src/SoundEffects.js</code>): <code>AudioListener</code> + 3 suoni sintetizzati via Web Audio (canestro, rimbalzo, tiro), zero asset esterni scaricati</td></tr>
 <tr><td>✅</td><td>FSM <code>GameMode</code> (PRACTICE/1v1/3v3) e FSM <code>TimeOfDay</code> (Sunrise/Day/Sunset/Night) — selezionabili dal Main Menu, <code>TimeOfDay</code> collegato a preset reali di luci/sfondo/faretti canestro</td></tr>
-<tr><td>✅</td><td>Main Menu completo — GAMEMODES → ROBOT (preview 3D live) → TIME OF DAY + START, pausa in-game (ESC) con OPTIONS/BACK TO GAME/BACK TO MAIN MENU</td></tr>
-<tr><td>✅</td><td>Refactor: <code>SoundEffects</code>/<code>CollisionWorld</code> — audio e collisioni ambientali raccolti in classi wrapper (stesso pattern di <code>RobotBase</code>/<code>Basketball</code>) invece di funzioni/variabili sciolte a livello di modulo in <code>main.js</code></td></tr>
+<tr><td>✅</td><td>Main Menu completo — GAMEMODES → ROBOT (preview 3D live, il robot palleggia davvero con <code>stepDribble</code>, barre stat SPEED/SHOOTING a blocchi) → TIME OF DAY + START, pausa in-game (ESC) con OPTIONS (ora con sfondo proprio)/BACK TO GAME/BACK TO MAIN MENU (reset completo dello stato di gioco, non solo il punteggio)</td></tr>
+<tr><td>✅</td><td>Refactor: <code>SoundEffects</code>/<code>CollisionWorld</code> — audio e collisioni ambientali raccolti in classi wrapper (stesso pattern di <code>RobotBase</code>/<code>Basketball</code>) invece di funzioni/variabili sciolte a livello di modulo in <code>main.js</code>; palleggio (<code>stepDribble</code>) estratto a funzione pura parametrizzata su robot/palla, riusata identica dal gioco vero e dalla preview del menu</td></tr>
+<tr><td>✅</td><td>Pallone: rotazione realistica (<code>updateBallSpin</code>, dedotta dalla velocità reale frame-su-frame) durante palleggio/tiro/handling/pickup, prima era visivamente fissa</td></tr>
 <tr><td>⬜</td><td>Section 3: Enemies (3v3) — AI e differenziazioni tra classi avversarie</td></tr>
 <tr><td>⬜</td><td>Section 3: personalizzazione menu colori</td></tr>
 <tr><td>⬜</td><td>Section 3: interazioni e stati aggiuntivi — "Steal"</td></tr>
 <tr><td>⬜</td><td>Section 3: Block/Steal (meccaniche difensive)</td></tr>
 <tr><td>⬜</td><td>Section 3: Animation Tweaks (rifinitura animazioni esistenti)</td></tr>
-<tr><td>⬜</td><td>Section 3: Main Menu e HUD rework (vedi "Tecniche UI da riprendere" sopra)</td></tr>
+<tr><td>✅</td><td>Section 3: Main Menu e HUD rework (vedi "Tecniche UI da riprendere" sopra) — anticipato in Section 2, Main Menu e scoreboard già con font Google/<code>clip-path</code>/<code>backdrop-filter</code> in stile thehollowzone; personalizzazione colori resta da fare (vedi voce sotto)</td></tr>
 <tr><td>⬜</td><td>Section 3: secondo polishing e allineamento con altri progetti e con l'esame</td></tr>
 <tr><td>⬜</td><td>Section 4: Classe Drone — stat + mossa speciale "Uplifting"</td></tr>
 <tr><td>⬜</td><td>Section 4: Classe Legged Manipulator — mossa speciale "Jump"</td></tr>
-<tr><td>⬜</td><td>Section 4: selettore Sunrise/Day/Sunset/Night (preset illuminazione)</td></tr>
-<tr><td>⬜</td><td>Section 4: altre impostazioni globali (Other Global Setting)</td></tr>
+<tr><td>✅</td><td>Section 4: selettore Sunrise/Day/Sunset/Night (preset illuminazione) — anticipato in Section 2 insieme al Main Menu, FSM <code>TimeOfDay</code> collegata a preset reali di luci/sfondo/faretti canestro</td></tr>
+<tr><td>✅</td><td>Section 4: altre impostazioni globali (Other Global Setting) — anticipato in Section 2, menu OPTIONS (SSAO on/off, ombre on/off, volume, FOV)</td></tr>
 <tr><td>⬜</td><td>Section 4: modalità di gioco effettive — 3v3 normale, beat the time, beat the score</td></tr>
 <tr><td>⬜</td><td>Section 4: polish finale e riallineamento</td></tr>
 <tr><td>⬜</td><td>Section 5: revisione completa del codice (a mano e assistita), cambiare il necessario e capire tutto</td></tr>
 <tr><td>✅</td><td>GitHub Pages base configurata (<code>base: './'</code> in <code>vite.config.js</code>)</td></tr>
 <tr><td>⬜</td><td>GitHub Pages attivo e funzionante online</td></tr>
 <tr><td>⬜</td><td>Link GitHub Pages in questo README</td></tr>
-<tr><td>⬜</td><td>Documentazione tecnica (5-10+ pagine)</td></tr>
-<tr><td>⬜</td><td>Registrazione Infostud</td></tr>
+<tr><td>⬜</td><td>Documentazione tecnica (5-10+ pagine) — struttura ricorrente scandagliata su 7/8 repo del corso (vedi "Documentazione Tecnica: Struttura da Altri Progetti" più sotto): Intro/Ambiente di Sviluppo → Librerie/Asset esterni → Modelli Gerarchici → Materiali/Luci → Animazioni → Interazione/Manuale Utente → Conclusioni/Limiti, mappata contro i requisiti del corso</td></tr>
+<tr><td>✅</td><td>Registrazione Infostud</td></tr>
 <tr><td>⬜</td><td>Email al docente</td></tr>
 </tbody>
 </table>
@@ -277,6 +277,12 @@ Lo Shooting System (`RobotState.NO_BALL`, animazione windup/release/recover, col
 | 7 | Molte collisioni segnavano "dentro" (verde) nella preview per tiri che in realtà toccavano il ferro e rimbalzavano via | `HOOP_DETECTION_RADIUS` (35, primo tentativo) era più largo del vero spazio fisicamente libero (`RIM_RING_RADIUS - RIM_TUBE_RADIUS - BALL_RADIUS = 21`) | Ridotto al valore geometrico più stretto (poi affinato ulteriormente, vedi #9) |
 | 8 | Il canestro con statistica SHOOTING alta, da vicino, a volte **peggiorava** il tiro invece di aiutarlo (la palla veniva sparata oltre il centro) | Il primo hoop-assist era un'accelerazione sulla velocità, che si accumula con quanto tempo la palla passa nel cono d'assistenza — un tiro lento/da vicino passa più tempo nel cono, accumulando una spinta eccessiva | Sostituito con una correzione di **posizione** (`pull = min(strength * dist/coneRadius * rate * dt, 1)`, clampata a 1): non può mai superare il centro del canestro qualunque sia il tempo di permanenza |
 | 9 | Nonostante il fix del cooldown per-oggetto, tiri che entravano chiaramente nel canestro continuavano a non dare né punteggio né linea verde in preview, specialmente da vicino | Due cause sommate: (a) `isHoopCrossing` testava solo la posizione **dopo** il passo di simulazione, non il punto esatto di attraversamento — con un passo di campionamento grezzo (preview) la palla poteva "saltare oltre" la stretta finestra del canestro proprio nell'istante vero del passaggio; (b) `HOOP_DETECTION_RADIUS` non aveva alcun margine di tolleranza (un tiro può sfiorare l'interno del ferro ed entrare comunque, non ogni tocco fa rimbalzare via) | `isHoopCrossing(previousPos, position, hoop)` ora **interpola** linearmente il punto esatto di attraversamento tra i due campioni invece di testare solo quello finale; `HOOP_DETECTION_RADIUS` riportato al valore geometrico esatto + 30% dello spessore del ferro di tolleranza; passo della preview (`TRAJECTORY_DT`) affinato da 0.02 a 0.005 per avvicinarsi alla risoluzione del volo reale (`SHOT_PHYSICS_SUBSTEP_DT=1/240`) |
+| 10 | La linea diventava verde solo se il tiro passava in un cerchio molto interno al canestro — nella realtà un tiro passa "in tutto il rim", anche sfiorando l'interno del ferro | `HOOP_DETECTION_RADIUS` (21+30% tolleranza ≈ 22.2) rappresentava solo "il centro della palla non tocca mai il ferro", non "il centro passa da qualche parte dentro il buco del canestro" — molto più stretto del vero raggio dell'apertura | Allargato al vero raggio geometrico dell'apertura (`RIM_RING_RADIUS - RIM_TUBE_RADIUS = 36`) |
+| 11 | Dopo backboard+rimbalzo sul ferro, la palla **ogni tanto** attraversava comunque la backboard, anche col cooldown per-oggetto già a posto | 0.3s di cooldown (valore originale) era troppo lungo: backboard e ferro sono fisicamente vicini, un rimbalzo sul ferro seguito a ruota da un ritorno verso la STESSA backboard (tutt'altro che raro alle velocità di tiro in gioco) restava ancora in cooldown su quell'oggetto specifico | `COLLISION_COOLDOWN` ridotto da 0.3s a 0.05s — la posizione viene già respinta esattamente al bordo del volume espanso nello stesso passo, bastano pochi passi fisici perché la velocità riflessa allontani davvero la palla |
+| 12 | Allargare `HOOP_DETECTION_RADIUS` (fix #10) rischiava di reintrodurre falsi positivi (verde/punteggio su tiri che in realtà rimbalzano via) | Nel volo reale `collisionWorld.resolve(...)` (che può deflettere la palla) veniva chiamato **prima** di `checkHoopScore` — il canestro veniva giudicato sulla posizione già respinta dalla collisione in questo stesso passo, non sul percorso balistico puro | Riordinato: `checkHoopScore` ora gira prima di `collisionWorld.resolve(...)` in `stepShotFlight`, stesso ordine già usato dalla preview |
+| 13 | La preview robot nel Main Menu (card MOBILE MANIPULATOR) mostrava il braccio muoversi ma la palla restava sempre incollata alla mano, mai un vero rimbalzo a terra | Prima versione: solo la fase "push" reimplementata a mano, senza le fasi drop/rise libere | Riscritta per usare `stepDribble`, la **stessa** funzione del palleggio automatico vero (estratta e parametrizzata su robot/palla/oggetto-stato), non una ricostruzione approssimata — vedi "Pallone e Palleggio" in CLAUDE.md |
+| 14 | Nella preview (prima di riusare `stepDribble`), c'era una pausa percepibile tra la fine della spinta e l'inizio della caduta, e il braccio iniziava a risalire nello stesso istante in cui la palla si staccava | Tentativo intermedio con `smoothstep` (derivata zero a inizio/fine) per la caduta, e un'unica transizione invece di separare "drop" (braccio fermo) da "rise" (braccio risale) | Superato riusando `stepDribble` stesso, che già separa correttamente le due fasi |
+| 15 | "Back to Main Menu" azzerava il punteggio ma una nuova PRACTICE ripartiva col robot fisicamente dov'era stato lasciato (a metà tiro/palleggio/dash) | Il reset toccava solo `score`, non lo stato di gioco transitorio (posizione robot, `RobotState`, palleggio, dash, tiro, handling, pickup) | Aggiunta `resetGameplayState()`, chiamata insieme all'azzeramento del punteggio |
 
 ---
 
@@ -305,6 +311,29 @@ Durante la prima fase di polish (ricerca di dead code/inefficienze/DRY) abbiamo 
 - **Sulle texture eravamo indietro, ora recuperato in parte**: tutti gli altri hanno set PBR completi (normal+roughness+AO, spesso 4-6 mappe) sui loro asset principali, quasi sempre **scaricati** da librerie di texture gratuite (nomi/risoluzioni tipiche di ambientCG/Poliigon). **Unica eccezione: `robot_factory`** (il progetto più simile al nostro per filosofia) genera le texture proceduralmente via `CanvasTexture`, senza asset esterni — abbiamo seguito lo stesso approccio per le texture del robot (normal map + roughness map generate in codice via height-field→gradiente, vedi `src/robots/manipulator.js`), invece di scaricare texture pronte come fa la maggioranza; per campo/pallone (già asset esterni non nostri) resta aperta l'opzione di scaricare qualcosa in futuro se necessario.
 - **GUI/debug**: `dat.GUI` compare una sola volta su 7 (a-space-odyssey); nessuno usa `lil-gui`; gli altri 6 (incluso `thehollowzone`) non hanno nessuna libreria GUI né un pannello debug visibile nel codice. Il nostro pannello fatto a mano non è un'anomalia, anzi è più elaborato della media.
 - **`isometric_racer`** (analizzato a parte, dopo lo Step 6, per il main menu): la sua card di selezione auto renderizza un **thumbnail 3D live** con un renderer offscreen condiviso, camera inquadrata sul bounding box reale del modello (8 angoli proiettati nel frustum per la distanza minima che li contiene tutti), un render singolo convertito in PNG (`toDataURL`) e incollato come `<img>` — tecnica ripresa identica per la card MANIPULATOR del nostro main menu (`renderRobotCardPreview` in `src/main.js`), dato che anche i nostri robot sono procedurali e non ha senso avere uno screenshot statico pre-fatto. Fisica veicolo (sterzo, aderenza al suolo via raycast, grip per materiale, collisioni con rimbalzo) interamente scritta a mano in `src/vehicle/physics.js`, nessun motore esterno — stesso spirito "zero librerie" della maggioranza scandagliata.
+
+### Documentazione Tecnica: Struttura da Altri Progetti (ricerca preliminare)
+
+Prima di scrivere la nostra documentazione tecnica (5-10+ pagine, requisito del corso), controllati gli altri 8 repo per vedere se/come avessero strutturato la loro. Nessuna implementazione ancora — solo riferimento per quando la scriveremo.
+
+| Repo | Report trovato? | File & posizione | Pagine |
+|---|---|---|---|
+| a-space-odyssey | Sì | `report.pdf` (root) | 5 |
+| thegoblinslayers | Sì | `Project Presentation.pdf` (root — nonostante il nome, è un report vero non slide) | 9 |
+| 404nation | No | — solo README | — |
+| theboringgame | Sì | `report/Affinita_Meconi_Report.pdf` | 20 |
+| interactivelan | Sì | `report.pdf` + `report.tex` **+ `Presentation.pptx`** separata | 17 |
+| thehollowzone | Sì | `docs/technical-report.pdf` + screenshot | 15 |
+| robot_factory | Sì | `docs/project_documentation.pdf` | 12 |
+| isometric_racer | Sì | `docs/Report_Gallo_Rinaldi.pdf` | 20 |
+
+**7 repo su 8** hanno un report dedicato oltre al README (quasi sempre PDF numerato/sezionato, mediana ~15 pagine), posizionato in root o in `docs/`/`report/`. Struttura ricorrente, praticamente identica in tutti: **Intro/Ambiente di Sviluppo → Librerie/Tool/Asset esterni → Modelli Gerarchici → Materiali/Luci → Animazioni → Interazione Utente/Manuale Utente** (spesso una vera tabella controlli) **→ Conclusioni/Limiti**, quasi sempre mappata esplicitamente contro i requisiti dichiarati del corso. `robot_factory` (il più simile al nostro per filosofia procedurale/imperativa) apre addirittura con un "requirement coverage summary" diretto — buon modello da seguire per la nostra.
+
+**Chiarimenti sui requisiti reali del corso** (dalla lettura effettiva dei 7 report, non solo la struttura): nessuna regola aggiuntiva/diversa trovata su rubrica a punti, gruppi, formato della discussione orale o librerie vietate — ma tre cose da tenere a mente:
+
+- **Il modello gerarchico PUÒ venire da una libreria esterna** — `a-space-odyssey` cita testualmente il requisito del corso: *"The composition of the two robots is complex enough and can be obtained from an external library."* Il "nessun modello esterno per i robot" è quindi una regola **nostra**, non richiesta dal corso — la richiesta vera è solo "gerarchia sufficientemente complessa".
+- **Vendorizzare Three.js localmente (no CDN a runtime) è una precauzione presa da due team indipendenti** (`isometric_racer`, `robot_factory`), motivata con "riproducibilità alla discussione senza dipendere dalla rete" — ma NON è un vincolo: `thehollowzone` e `interactivelan` usano tranquillamente Vite + build, quindi il nostro setup è a posto.
+- **Conferma, non new**: `isometric_racer` attribuisce esplicitamente al corso il "nessuna animazione importata", coerente con quanto già sappiamo.
 
 ### Spunti per Enemy AI (Section 3, ricerca preliminare)
 

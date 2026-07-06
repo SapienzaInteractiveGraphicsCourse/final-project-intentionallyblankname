@@ -325,6 +325,44 @@
       color: var(--ui-orange);
       margin-top: 4px;
     }
+    .card-stats {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stat-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .stat-row .stat-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: #999;
+      width: 52px;
+      text-align: left;
+      flex-shrink: 0;
+    }
+    .stat-bar {
+      display: flex;
+      gap: 3px;
+      flex: 1;
+    }
+    .stat-block {
+      height: 7px;
+      flex: 1;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+    /* verde, non l'arancione del resto del tema — coerente col colore
+       "canestro/verde" già usato altrove (preview di traiettoria) */
+    .stat-block.filled {
+      background: #43a047;
+      border-color: #43a047;
+      box-shadow: 0 0 6px rgba(67, 160, 71, 0.6);
+    }
     .menu-back {
       background: none;
       border: none;
@@ -336,6 +374,17 @@
       text-decoration: underline;
     }
     .menu-back:hover { color: var(--ui-orange); }
+    .menu-options-panel {
+      background: var(--ui-panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+      padding: 20px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
     #menu-options .option-row {
       display: flex;
       align-items: center;
@@ -373,8 +422,9 @@
       <div class="menu-card-grid" id="robot-card-grid">
         <div class="menu-card" data-robot="manipulator">
           <div class="card-icon" id="robot-preview-manipulator"></div>
-          <div class="card-title">MANIPULATOR</div>
+          <div class="card-title">MOBILE MANIPULATOR</div>
           <div class="card-sub">Ruote · Bilanciato</div>
+          <div class="card-stats" id="robot-stats-manipulator"></div>
         </div>
         <div class="menu-card disabled">
           <div class="card-icon">?</div>
@@ -413,21 +463,23 @@
 
     <div id="menu-options" class="menu-screen">
       <div class="menu-title">OPTIONS</div>
-      <div class="option-row">
-        <span>SSAO</span>
-        <input type="checkbox" id="opt-ssao" checked />
-      </div>
-      <div class="option-row">
-        <span>Ombre</span>
-        <input type="checkbox" id="opt-shadows" checked />
-      </div>
-      <div class="option-row">
-        <span>Volume</span>
-        <input type="range" id="opt-volume" min="0" max="1" step="0.05" value="1" />
-      </div>
-      <div class="option-row">
-        <span>FOV</span>
-        <input type="range" id="opt-fov" min="60" max="100" step="1" value="75" />
+      <div class="menu-options-panel">
+        <div class="option-row">
+          <span>SSAO</span>
+          <input type="checkbox" id="opt-ssao" checked />
+        </div>
+        <div class="option-row">
+          <span>Ombre</span>
+          <input type="checkbox" id="opt-shadows" checked />
+        </div>
+        <div class="option-row">
+          <span>Volume</span>
+          <input type="range" id="opt-volume" min="0" max="1" step="0.05" value="1" />
+        </div>
+        <div class="option-row">
+          <span>FOV</span>
+          <input type="range" id="opt-fov" min="60" max="100" step="1" value="75" />
+        </div>
       </div>
       <button class="menu-back" id="menu-options-back-btn">← indietro</button>
     </div>

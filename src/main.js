@@ -6,7 +6,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
-import { ManipulatorRobot } from './robots/ManipulatorRobot.js'
+import { ManipulatorRobot, MANIPULATOR_STATS } from './robots/ManipulatorRobot.js'
 import { RobotState } from './robots/RobotBase.js'
 import { createProceduralPBRMaps, drawBrushedMetal } from './robots/manipulator.js'
 import { Basketball, BallState } from './Basketball.js'
@@ -417,7 +417,7 @@ const FLOOR_HORIZONTAL_DAMPING = 0.9
 // a occhio — vedi i commenti nel file) e il metodo resolve() che li
 // controlla tutti in un colpo solo. RIM_RING_RADIUS/RIM_TUBE_RADIUS
 // esportate a parte: servono anche qui sotto (HOOP_ASSIST_BASE_RADIUS)
-const collisionWorld = new CollisionWorld(BALL_RADIUS)
+const collisionWorld = new CollisionWorld()
 // zona dei 3 punti: dentro l'arco (da entrambi i lati) la potenza del tiro è
 // dimezzata. Raggio NON stimato a occhio: distanza reale dal ferro al punto
 // più "alto" dell'arco (mesh 'Sweep_1_Basket ball lines _0'/'Sweep_3_2_...'),
@@ -598,6 +598,11 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
     if (!child.isMesh) return
     child.castShadow = true
     child.receiveShadow = true
+    // leggero schiarimento della color map (il fattore color di un
+    // materiale moltiplica il texel, non è clampato a 1 — va oltre il
+    // bianco pieno invece di tingere, che è esattamente "un po' più
+    // luminoso" invece di un cambio di tonalità)
+    if (child.material?.color) child.material.color.multiplyScalar(1.15)
   })
   basketball = new Basketball(gltf.scene)
   // il robot parte già in possesso della palla (palleggio automatico da
@@ -630,7 +635,7 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
 // 0.02 (50Hz) era troppo grezzo rispetto al volo fisico reale
 // (SHOT_PHYSICS_SUBSTEP_DT=1/240, ~240Hz): a velocità di tiro normali la
 // palla si sposta ~22 unità a passo, abbastanza da "saltare oltre" la
-// stretta finestra di HOOP_DETECTION_RADIUS (20) proprio nell'istante del
+// stretta finestra di HOOP_DETECTION_RADIUS proprio nell'istante del
 // vero attraversamento — tiri che in realtà entrano (verde) mostravano
 // blu (ferro) nella preview solo per la grana del campionamento
 const TRAJECTORY_DT = 0.005
@@ -1510,30 +1515,39 @@ let dribbleAccumulator = 0
 // --- Loop ---
 const clock = new THREE.Clock()
 
-// Palleggio: unica funzione chiamata a passo fisso (vedi accumulator in
-// animate()). dt è sempre DRIBBLE_FIXED_DT, mai il delta di rendering.
-function updateDribble(dt) {
-  dribblePhaseT += dt
+// Simulazione del palleggio estratta a parte (non solo inline in
+// updateDribble): stessa identica macchina a stati/fisica, ma parametrizzata
+// su un robot/bersaglio-palla qualunque invece dei soli manipulator/
+// basketball globali — riusata IDENTICA anche dalla preview robot del Main
+// Menu (vedi renderRobotCardPreview), che deve mostrare il vero palleggio,
+// non un'imitazione con un timing indovinato a parte. state è un oggetto
+// { phase, phaseT, armEase, ballVelocityY, previousPushPaddleY,
+// riseBallisticY, lockOffset (Vector3) } — mutato in place, chi chiama
+// decide come/se leggerne i campi dopo. onBounce (opzionale) scatta solo al
+// tocco del pavimento in 'drop': il gioco vero ci suona sfx.playBounce, la
+// preview del menu resta silenziosa (nessun suono atteso sfogliando i menu)
+function stepDribble(state, robot, ballPositionTarget, dt, onBounce) {
+  state.phaseT += dt
   const [elbowAmplitude, link1Amplitude] = dribbleAmplitudesRad()
-  // dribbleArmEase aggiornata solo in 'push'/'rise' — in 'drop' resta
-  // quella di fine 'push' (il braccio è fermo in fondo, non tocca nulla)
-  if (dribblePhase === 'push') {
-    const t = Math.min(dribblePhaseT / DRIBBLE_PUSH_DURATION, 1)
-    dribbleArmEase = t * t // ease-IN: velocità massima (non zero) proprio al rilascio, sempre da 0 (pose pulita, niente scatto residuo)
-  } else if (dribblePhase === 'rise') {
+  // armEase aggiornata solo in 'push'/'rise' — in 'drop' resta quella di
+  // fine 'push' (il braccio è fermo in fondo, non tocca nulla)
+  if (state.phase === 'push') {
+    const t = Math.min(state.phaseT / DRIBBLE_PUSH_DURATION, 1)
+    state.armEase = t * t // ease-IN: velocità massima (non zero) proprio al rilascio, sempre da 0 (pose pulita, niente scatto residuo)
+  } else if (state.phase === 'rise') {
     const riseDuration = BALL_BOUNCE_SPEED / BALL_GRAVITY // tempo per decelerare a v=0 sotto gravità
-    const t = Math.min(dribblePhaseT / riseDuration, 1)
-    dribbleArmEase = 1 - t * t * (3 - 2 * t) // da 1 a 0: il braccio torna su mentre la palla risale
+    const t = Math.min(state.phaseT / riseDuration, 1)
+    state.armEase = 1 - t * t * (3 - 2 * t) // da 1 a 0: il braccio torna su mentre la palla risale
   }
   // applicata PRIMA di leggere la world position della paletta, altrimenti
   // sarebbe in ritardo di un frame rispetto alla posa appena decisa sopra
-  manipulator.controls.setDribbleOffsets(dribbleArmEase * elbowAmplitude, dribbleArmEase * link1Amplitude)
+  robot.controls.setDribbleOffsets(state.armEase * elbowAmplitude, state.armEase * link1Amplitude)
 
   // updateWorldMatrix forza il ricalcolo subito (matrixWorld si aggiorna
   // di norma solo durante il render, quindi senza sarebbe in ritardo di
   // un frame rispetto alla posa appena applicata sopra)
-  manipulator.paddle.updateWorldMatrix(true, false)
-  manipulator.paddle.getWorldPosition(paddleWorldPos)
+  robot.paddle.updateWorldMatrix(true, false)
+  robot.paddle.getWorldPosition(paddleWorldPos)
   // il punto di tracking (centro geometrico della paletta) non è dove
   // dovrebbe stare la palla a occhio: 3 offset (Forward/Side/Down,
   // tarabili da debug → Basketball → Ball Offset) spostano quel punto.
@@ -1546,22 +1560,22 @@ function updateDribble(dt) {
   // automatico): il tilt della paletta resta costante in questa fase
   // (state.paddleTilt, mai toccato da setShootTilt), quindi la formula
   // yaw-only che ha sempre funzionato resta corretta invariata
-  angleToForward(manipulator.joints.base.rotation.y, paddleForwardDir)
+  angleToForward(robot.joints.base.rotation.y, paddleForwardDir)
   rotateRight(paddleForwardDir, paddleSideDir)
   paddleWorldPos
     .addScaledVector(paddleForwardDir, BALL_OFFSET_FORWARD)
     .addScaledVector(paddleSideDir, BALL_OFFSET_SIDE)
     .addScaledVector(paddleDownDir, BALL_OFFSET_DOWN)
 
-  if (dribblePhase === 'push') {
+  if (state.phase === 'push') {
     // lockOffset si riassorbe in DRIBBLE_LOCK_ABSORB_TIME (breve, non
     // sull'intera spinta): al frame del "riaggancio" la palla resta
     // esattamente dov'era (nessuno scatto), poi converge in fretta sulla
     // paletta — per il resto della spinta la segue esattamente, offset zero
-    const lockBlend = Math.min(dribblePhaseT / DRIBBLE_LOCK_ABSORB_TIME, 1)
-    basketball.position.copy(paddleWorldPos).addScaledVector(lockOffset, 1 - lockBlend)
+    const lockBlend = Math.min(state.phaseT / DRIBBLE_LOCK_ABSORB_TIME, 1)
+    ballPositionTarget.copy(paddleWorldPos).addScaledVector(state.lockOffset, 1 - lockBlend)
     // velocità dedotta dal movimento REALE della paletta (paddleWorldPos),
-    // non da basketball.position: quella include anche il riassorbimento
+    // non da ballPositionTarget: quella include anche il riassorbimento
     // di lockOffset, che con Lock Absorb Time pari all'intera Push
     // Duration contribuisce un termine costante alla velocità per tutta
     // la spinta — compreso l'ultimo passo, quello del rilascio. lockOffset
@@ -1570,52 +1584,80 @@ function updateDribble(dt) {
     // rilascio, dando l'impressione di un azzeramento/rallentamento a inizio 'drop'.
     // Con dt fisso questa lettura per-passo è stabile: non c'è più un delta
     // variabile/anomalo che possa farla collassare vicino a zero
-    if (previousPushPaddleY !== null) ballVelocityY = (paddleWorldPos.y - previousPushPaddleY) / dt
-    previousPushPaddleY = paddleWorldPos.y
-    // tolleranza, non ">= 1" stretto: dribblePhaseT accumula dt (1/120, non
+    if (state.previousPushPaddleY !== null) state.ballVelocityY = (paddleWorldPos.y - state.previousPushPaddleY) / dt
+    state.previousPushPaddleY = paddleWorldPos.y
+    // tolleranza, non ">= 1" stretto: phaseT accumula dt (1/120, non
     // rappresentabile esattamente in binario) per ~30 passi, quindi arriva
-    // a un pelo SOTTO 0.25 invece che esattamente uguale — dribbleArmEase
-    // tocca 0.999999999999998 invece di 1, e senza tolleranza serve un
-    // passo fisso intero "sprecato" in più prima che la transizione scatti
+    // a un pelo SOTTO 0.25 invece che esattamente uguale — armEase tocca
+    // 0.999999999999998 invece di 1, e senza tolleranza serve un passo
+    // fisso intero "sprecato" in più prima che la transizione scatti
     // davvero. In quel passo la paletta è già a fine corsa e non si muove
     // per niente (Δy = 0 esatto) → l'ultima ballVelocityY calcolata è
     // sempre zero, ad ogni singolo ciclo (deterministico, non casuale)
-    if (dribbleArmEase >= 1 - 1e-6) { dribblePhase = 'drop'; dribblePhaseT = 0 }
-  } else if (dribblePhase === 'drop') {
-    ballVelocityY -= BALL_GRAVITY * dt
-    let ballY = basketball.position.y + ballVelocityY * dt
+    if (state.armEase >= 1 - 1e-6) { state.phase = 'drop'; state.phaseT = 0 }
+  } else if (state.phase === 'drop') {
+    state.ballVelocityY -= BALL_GRAVITY * dt
+    let ballY = ballPositionTarget.y + state.ballVelocityY * dt
     if (ballY <= BALL_RADIUS) {
       ballY = BALL_RADIUS
-      ballVelocityY = BALL_BOUNCE_SPEED
-      riseBallisticY = ballY // stato fisico vero di 'rise', riparte dal punto di rimbalzo
-      dribblePhase = 'rise'
-      dribblePhaseT = 0
-      // volume ridotto: il palleggio automatico non si ferma mai, a piena
-      // intensità diventava fastidioso in loop continuo
-      sfx.playBounce(0.35)
+      state.ballVelocityY = BALL_BOUNCE_SPEED
+      state.riseBallisticY = ballY // stato fisico vero di 'rise', riparte dal punto di rimbalzo
+      state.phase = 'rise'
+      state.phaseT = 0
+      if (onBounce) onBounce()
     }
-    basketball.position.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
+    ballPositionTarget.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
   } else { // 'rise'
-    ballVelocityY -= BALL_GRAVITY * dt
+    state.ballVelocityY -= BALL_GRAVITY * dt
     // riseBallisticY integra la fisica pura, MAI la Y già corretta (che
     // altrimenti si accumulerebbe frame dopo frame) — la correzione è
     // un piccolo offset costante applicato solo qui, in fase di render
-    riseBallisticY += ballVelocityY * dt
-    const ballY = riseBallisticY - DRIBBLE_RISE_Y_CORRECTION
-    basketball.position.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
+    state.riseBallisticY += state.ballVelocityY * dt
+    const ballY = state.riseBallisticY - DRIBBLE_RISE_Y_CORRECTION
+    ballPositionTarget.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
     // riaggancio al vero apice balistico (v=0): il riaggancio esattamente
     // lì, non prima, è ciò che minimizza lo scatto (sia la velocità della
     // palla sia il ritorno del braccio sono più piatti in quel punto)
-    if (dribbleArmEase <= 0 || ballVelocityY <= 0) {
+    if (state.armEase <= 0 || state.ballVelocityY <= 0) {
       // congela l'offset palla↔paletta nell'istante esatto del riaggancio,
       // così 'push' riparte dalla posizione reale della palla, non da uno
       // scatto verso la paletta
-      lockOffset.copy(basketball.position).sub(paddleWorldPos)
-      previousPushPaddleY = null // nessuna storia di velocità pregressa per il nuovo 'push'
-      dribblePhase = 'push'
-      dribblePhaseT = 0
+      state.lockOffset.copy(ballPositionTarget).sub(paddleWorldPos)
+      state.previousPushPaddleY = null // nessuna storia di velocità pregressa per il nuovo 'push'
+      state.phase = 'push'
+      state.phaseT = 0
     }
   }
+}
+
+// stato del palleggio vero, ancora esposto come variabili a modulo (non
+// solo dentro un oggetto state) perché letto/scritto da parecchio altro
+// codice sparso (pannello debug, resetDribbleState, handling, pickup,
+// tiro) — updateDribble li sincronizza con l'oggetto state richiesto da
+// stepDribble prima/dopo la chiamata, così tutto il resto del file continua
+// a funzionare esattamente come prima di questa estrazione
+const realDribbleState = {
+  phase: 'push', phaseT: 0, armEase: 0,
+  ballVelocityY: 0, previousPushPaddleY: null, riseBallisticY: 0,
+  lockOffset: null, // assegnato sotto: è lo stesso oggetto lockOffset già dichiarato a modulo
+}
+// Palleggio: unica funzione chiamata a passo fisso (vedi accumulator in
+// animate()). dt è sempre DRIBBLE_FIXED_DT, mai il delta di rendering.
+function updateDribble(dt) {
+  realDribbleState.phase = dribblePhase
+  realDribbleState.phaseT = dribblePhaseT
+  realDribbleState.armEase = dribbleArmEase
+  realDribbleState.ballVelocityY = ballVelocityY
+  realDribbleState.previousPushPaddleY = previousPushPaddleY
+  realDribbleState.riseBallisticY = riseBallisticY
+  realDribbleState.lockOffset = lockOffset
+  stepDribble(realDribbleState, manipulator, basketball.position, dt, () => sfx.playBounce(0.35))
+  dribblePhase = realDribbleState.phase
+  dribblePhaseT = realDribbleState.phaseT
+  dribbleArmEase = realDribbleState.armEase
+  ballVelocityY = realDribbleState.ballVelocityY
+  previousPushPaddleY = realDribbleState.previousPushPaddleY
+  riseBallisticY = realDribbleState.riseBallisticY
 }
 
 // RobotState.HANDLING (tasto destro tenuto premuto): posa di presa fissa,
@@ -1780,10 +1822,16 @@ function stepShotFlight(dt) {
   basketball.position.addScaledVector(shotVelocity, dt)
   applyHoopAssist(basketball.position, shotVelocity, dt, shootingStatToAssistStrength(manipulator.stats.shooting))
 
+  // canestro controllato SUL PERCORSO BALISTICO PURO, prima di eventuale
+  // deflessione da collisione in questo stesso passo — altrimenti un tiro
+  // che passa dentro l'apertura del ferro (magari sfiorandolo) verrebbe
+  // giudicato sulla posizione già respinta dalla collisione, non su dove
+  // la palla è passata davvero. Stesso ordine già usato dalla preview
+  // (hitScore calcolato prima di hitVisible/resolve)
+  checkHoopScore(scratchPreviousShotPos, basketball.position)
   // solo nel volo reale (non nella preview, che condivide la stessa
   // funzione ma non deve mai suonare mentre si sta solo mirando)
   if (collisionWorld.resolve(basketball.position, shotVelocity, dt, shotCollisionCooldowns, BALL_RADIUS)) sfx.playBounce()
-  checkHoopScore(scratchPreviousShotPos, basketball.position)
 
   if (basketball.position.y <= BALL_RADIUS) {
     basketball.position.y = BALL_RADIUS
@@ -2022,6 +2070,9 @@ const menuOverlayEl = document.getElementById('menu-overlay')
 // prima di essere nascosto — nascosto da subito nel markup, nessun flash
 function showMenuScreen(id) {
   document.querySelectorAll('.menu-screen').forEach(el => el.classList.toggle('active', el.id === id))
+  // l'anteprima robot (canvas live, palleggio animato) anima solo mentre
+  // la sua card è davvero visibile — niente sprecato sulle altre schermate
+  robotPreviewActive = (id === 'menu-robot')
 }
 document.querySelectorAll('[data-goto]').forEach(el => {
   el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
@@ -2060,11 +2111,52 @@ document.addEventListener('keydown', e => {
   if (controls.isLocked) controls.unlock() // farà scattare anche il listener 'unlock' sopra, openPauseMenu() è idempotente
   else openPauseMenu()
 })
+// BACK TO MAIN MENU deve riportare a una partita davvero pulita, non solo
+// azzerare il punteggio — altrimenti una nuova PRACTICE iniziava con 0
+// punti ma il robot dove lo si era lasciato fisicamente sul campo, ancora
+// a metà tiro/palleggio/dash. Riporta ogni pezzo di stato transitorio (non
+// gameMode/timeOfDay: quelli restano l'ultima scelta, si ricambiano
+// rifacendo il flusso se serve) alla stessa condizione di un ingresso a
+// freddo in Play
+function resetGameplayState() {
+  manipulator.root.position.set(0, 0, 0)
+  robotFacing = 0
+  wheelsCurrentAngle = -Math.PI / 2 // combacia col valore iniziale del `let` a modulo
+  manipulator.controls.setWheelsYaw(wheelsCurrentAngle)
+  orbitYaw = 0
+  orbitPitch = ORBIT_PITCH_REST
+
+  manipulator.setState(RobotState.DRIBBLE)
+  if (basketball) basketball.setState(BallState.HANDLED)
+  resetDribbleState()
+  clearAllCollisionCooldowns()
+
+  dashCooldown = 0
+  dashTimeRemaining = 0
+
+  shootPhase = 'idle'
+  shootPhaseT = 0
+  shootReleased = false
+  shootStateTransitionTimer = 0
+  shotWasInsideArc = false
+  shotVelocity.set(0, 0, 0)
+  manipulator.controls.setShootTilt(0)
+
+  handlingGrip = 0
+  handlingTiltOffset = 0
+  manipulator.controls.setGrip(0)
+
+  pickupPhase = 'idle'
+  pickupPhaseT = 0
+
+  hideTrajectoryPreview()
+}
 document.getElementById('menu-back-to-main-btn').addEventListener('click', () => {
-  // reset: punteggio a zero e ritorno all'inizio del flusso di scelta —
-  // gameMode/timeOfDay restano quelli scelti l'ultima volta (li si può
-  // ricambiare rifacendo il flusso, non serve azzerarli anche loro)
+  // reset: punteggio a zero, stato di gioco pulito, ritorno all'inizio del
+  // flusso di scelta — gameMode/timeOfDay restano quelli scelti l'ultima
+  // volta (li si può ricambiare rifacendo il flusso, non serve azzerarli anche loro)
   addScore(-score)
+  resetGameplayState()
   showMenuScreen('menu-main')
 })
 
@@ -2153,18 +2245,24 @@ document.getElementById('opt-fov').addEventListener('input', e => {
 })
 
 // --- Main Menu: anteprima robot live (card MANIPULATOR) ---
-// stessa tecnica di isometric_racer (src/ui/carPreview.js, vedi README):
-// renderer offscreen condiviso, camera inquadrata sul bounding box reale
-// del modello (non una foto/asset statico — il robot è procedurale, non
-// ha senso avere uno screenshot pre-fatto), un render singolo convertito
-// in PNG e inserito come <img> nella card. Nessuna rotazione continua.
+// stessa tecnica base di isometric_racer (src/ui/carPreview.js, vedi
+// README): renderer offscreen condiviso, camera inquadrata sul bounding
+// box reale del modello (non una foto/asset statico — il robot è
+// procedurale, non ha senso avere uno screenshot pre-fatto). A differenza
+// della prima versione (un render singolo → PNG statico), qui il
+// renderer resta vivo e il canvas stesso finisce nella card: il robot
+// palleggia davvero (stessa API controls.setDribbleOffsets del palleggio
+// vero), animato finché la schermata ROBOT è quella attiva
+let robotPreviewActive = false
 function renderRobotCardPreview() {
   const previewSize = 200
-  const previewRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true })
+  const previewRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
   previewRenderer.setSize(previewSize, previewSize)
   previewRenderer.setPixelRatio(1)
   previewRenderer.outputColorSpace = THREE.SRGBColorSpace
   previewRenderer.toneMapping = THREE.ACESFilmicToneMapping
+  previewRenderer.domElement.style.maxWidth = '100%'
+  previewRenderer.domElement.style.maxHeight = '100%'
 
   const previewScene = new THREE.Scene()
   previewScene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.2))
@@ -2178,9 +2276,22 @@ function renderRobotCardPreview() {
   previewRobot.controls.manipulatorScale(45)
   previewScene.add(previewRobot.root)
 
-  // inquadra il bounding box reale: distanza minima per contenere tutti
-  // gli 8 angoli nel frustum, vista di 3/4 leggermente dall'alto
+  // pallone della preview: una sfera semplice (colore arancione da
+  // pallacanestro) invece del GLTF vero — il pallone reale carica async e
+  // potrebbe non essere pronto quando il menu appare, e per un'icona da
+  // 200px il dettaglio in più non si vedrebbe comunque
+  const previewBall = new THREE.Mesh(
+    new THREE.SphereGeometry(BALL_RADIUS, 16, 16),
+    new THREE.MeshStandardMaterial({ color: 0xd2691e, roughness: 0.7 })
+  )
+  previewScene.add(previewBall)
+
+  // inquadra il bounding box reale (robot + raggio di escursione del
+  // pallone, non solo il robot a riposo — altrimenti il pallone in basso
+  // durante la spinta uscirebbe dal frame) — distanza minima per
+  // contenere tutti gli 8 angoli nel frustum, vista di 3/4 dall'alto
   const box = new THREE.Box3().setFromObject(previewRobot.root)
+  box.expandByVector(new THREE.Vector3(BALL_RADIUS, BALL_RADIUS * 2, BALL_RADIUS))
   const center = box.getCenter(new THREE.Vector3())
   const viewDir = new THREE.Vector3(0.9, 0.55, 1).normalize()
   const halfFovRad = THREE.MathUtils.degToRad(previewCamera.fov / 2)
@@ -2201,17 +2312,98 @@ function renderRobotCardPreview() {
   previewCamera.position.copy(center).addScaledVector(viewDir, distance)
   previewCamera.lookAt(center)
 
-  previewRenderer.render(previewScene, previewCamera)
-  const dataUrl = previewRenderer.domElement.toDataURL('image/png')
+  document.getElementById('robot-preview-manipulator').replaceChildren(previewRenderer.domElement)
 
-  const img = document.createElement('img')
-  img.src = dataUrl
-  document.getElementById('robot-preview-manipulator').replaceChildren(img)
+  // palleggio della preview: chiama stepDribble, la STESSA identica
+  // funzione/simulazione del palleggio automatico vero (vedi sopra, non
+  // una ricostruzione approssimata a parte) — solo con un proprio oggetto
+  // state e il proprio robot/palla bersaglio. Nessun suono (onBounce
+  // omesso): sfogliare i menu non deve produrre un thump ad ogni rimbalzo
+  const previewDribbleState = {
+    phase: 'push', phaseT: 0, armEase: 0,
+    ballVelocityY: 0, previousPushPaddleY: null, riseBallisticY: 0,
+    lockOffset: new THREE.Vector3(),
+  }
+  const previewClock = new THREE.Clock()
 
-  // pulizia: la scena offscreen non serve più dopo lo snapshot
-  previewRenderer.dispose()
+  function tickPreview() {
+    requestAnimationFrame(tickPreview)
+    if (!robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
+    const dt = Math.min(previewClock.getDelta(), 0.1) // stesso clamp del delta principale in animate()
+    stepDribble(previewDribbleState, previewRobot, previewBall.position, dt)
+    previewRenderer.render(previewScene, previewCamera)
+  }
+  tickPreview()
 }
 renderRobotCardPreview()
+
+// barre a blocchi delle stat sulla card robot (Main Menu → ROBOT): letture
+// dirette da MANIPULATOR_STATS (src/robots/ManipulatorRobot.js), non valori
+// ricopiati a mano nell'HTML — se una stat cambia in futuro la card resta
+// allineata da sola. maxByStat riflette le scale reali usate altrove nel
+// codice (SPEED 1-5, SHOOTING 1-3 — vedi ManipulatorRobot.js/applyHoopAssist)
+function renderStatBars(containerEl, stats) {
+  const maxByStat = { speed: 5, shooting: 3 }
+  containerEl.replaceChildren(...Object.entries(stats).map(([key, value]) => {
+    const max = maxByStat[key] ?? value
+    const row = document.createElement('div')
+    row.className = 'stat-row'
+    const label = document.createElement('span')
+    label.className = 'stat-label'
+    label.textContent = key.toUpperCase()
+    const bar = document.createElement('div')
+    bar.className = 'stat-bar'
+    for (let i = 0; i < max; i++) {
+      const block = document.createElement('div')
+      block.className = 'stat-block' + (i < value ? ' filled' : '')
+      bar.appendChild(block)
+    }
+    row.append(label, bar)
+    return row
+  }))
+}
+renderStatBars(document.getElementById('robot-stats-manipulator'), MANIPULATOR_STATS)
+
+// Rotazione del pallone: dedotta dalla velocità REALE (differenza di
+// posizione frame-su-frame), non simulata separatamente per ogni stato
+// (palleggio/tiro/handling/pickup) — un solo punto condiviso invece di
+// quattro copie, e funziona automaticamente qualunque cosa stia muovendo
+// la palla in quel momento, senza bisogno di passargli una velocità esplicita.
+// Asse di rotolamento = up × velocità (normalizzato): la stessa formula del
+// rotolamento senza slittamento su un piano orizzontale, applicata anche in
+// volo — non è fisicamente esatta lì (la palla non tocca terra), ma visivamente
+// è quello che ci si aspetta di vedere. Velocità angolare = |velocità| / raggio
+const ballSpinPreviousPos = new THREE.Vector3()
+const ballSpinVelocity = new THREE.Vector3()
+const ballSpinAxis = new THREE.Vector3()
+let ballSpinInitialized = false
+// tetto alla velocità usata per lo spin (non alla velocità vera della palla):
+// il pickup/riaggancio del palleggio spostano la palla di scatto in un solo
+// frame (per design, vedi Pickup Automatico) — senza un tetto quello scatto
+// produrrebbe un giro di spin istantaneo e visibilmente innaturale
+const BALL_SPIN_MAX_SPEED = 2000
+function updateBallSpin(dt) {
+  if (!ballSpinInitialized) {
+    ballSpinPreviousPos.copy(basketball.position)
+    ballSpinInitialized = true
+    return
+  }
+  ballSpinVelocity.copy(basketball.position).sub(ballSpinPreviousPos).divideScalar(dt)
+  ballSpinPreviousPos.copy(basketball.position)
+  const speed = Math.min(ballSpinVelocity.length(), BALL_SPIN_MAX_SPEED)
+  if (speed < 1e-4) return
+  // lunghezza dell'asse controllata PRIMA di normalizzare: con velocità
+  // (quasi) puramente verticale (comune nel palleggio da fermo, push/drop/
+  // rise senza movimento in X/Z) up×velocità è (quasi) zero — normalizzare
+  // un vettore zero produce NaN, che poi avvelenerebbe per sempre il
+  // quaternione della palla (si compone con quello esistente ad ogni
+  // chiamata, non si riprenderebbe più da sola)
+  ballSpinAxis.set(0, 1, 0).cross(ballSpinVelocity)
+  const axisLength = ballSpinAxis.length()
+  if (axisLength < 1e-4) return // nessun asse di rotolamento orizzontale sensato
+  ballSpinAxis.divideScalar(axisLength)
+  basketball.mesh.rotateOnWorldAxis(ballSpinAxis, (speed / BALL_RADIUS) * dt)
+}
 
 function animate() {
   requestAnimationFrame(animate)
@@ -2397,6 +2589,9 @@ function animate() {
         }
       }
     }
+    // dopo l'aggiornamento della palla per questo frame, qualunque stato
+    // l'abbia mossa — vedi commento su updateBallSpin sopra
+    updateBallSpin(delta)
   }
 
   // preview di traiettoria: solo mentre si mira davvero (HANDLING, nessuna

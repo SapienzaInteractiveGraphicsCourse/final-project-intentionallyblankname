@@ -7,7 +7,11 @@ import { RobotBase } from './RobotBase.js'
 // attrattivo verso il centro canestro (vedi applyHoopAssist in main.js) —
 // non tocca la forza del tiro (quella resta costante/di zona), solo quanto
 // "aiuta" vicino al ferro
-const MANIPULATOR_STATS = { speed: 3, shooting: 1 }
+// esportata (non solo locale): la card di selezione robot nel Main Menu
+// legge questi stessi valori per disegnare le barre a blocchi (SPEED su
+// scala 1-5, SHOOTING su scala 1-3) invece di averli ricopiati a mano
+// nell'HTML, che sarebbe potuto disallinearsi da questi
+export const MANIPULATOR_STATS = { speed: 3, shooting: 1 }
 
 export class ManipulatorRobot extends RobotBase {
   constructor() {

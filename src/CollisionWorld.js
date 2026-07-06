@@ -16,7 +16,7 @@ export const RIM_TUBE_RADIUS = 4
 // vicina (v' = v - (1+restituzione)(v·n)n), stesso approccio a mano già
 // usato per il palleggio.
 export class CollisionWorld {
-  constructor(ballRadius) {
+  constructor() {
     // Collisione backboard: coordinate NON stimate a occhio — estratte
     // analizzando gli accessor del GLTF (bounding box world-space delle
     // mesh 'Cube_2_5_Mat_0'/'Cube_3_5_Mat_0')
@@ -35,15 +35,13 @@ export class CollisionWorld {
     ]
 
     this.RIM_RESTITUTION = 0.3
-    // raggio di rilevamento canestro: deve stare vicino al vero spazio
-    // libero (RIM_RING_RADIUS - RIM_TUBE_RADIUS - ballRadius), +30% dello
-    // spessore del ferro di tolleranza — un tiro può sfiorare l'INTERNO
-    // del ferro ed entrare comunque (non ogni tocco fa rimbalzare via,
-    // nella realtà); zero margine mancava per un pelo tiri puliti per la
-    // minima imprecisione geometrica. Calcolato una volta con ballRadius
-    // di costruzione, non si aggiorna se BALL_RADIUS cambia da debug dopo
-    // (stesso comportamento di prima di questo refactor)
-    const hoopDetectionRadius = RIM_RING_RADIUS - RIM_TUBE_RADIUS - ballRadius + RIM_TUBE_RADIUS * 0.3
+    // raggio di rilevamento canestro: il vero raggio geometrico
+    // dell'APERTURA del ferro (RIM_RING_RADIUS - RIM_TUBE_RADIUS, il buco
+    // vuoto al centro), non solo lo spazio in cui la palla non tocca MAI
+    // il ferro (quello sarebbe più stretto, sottraendo anche il raggio
+    // della palla) — un tiro che sfiora l'interno del ferro entra
+    // comunque nella realtà, "tutto il rim" deve contare come canestro
+    const hoopDetectionRadius = RIM_RING_RADIUS - RIM_TUBE_RADIUS
     this.hoops = [
       { center: new THREE.Vector3(1079.85, 262.55, 2.5), radius: hoopDetectionRadius },
       { center: new THREE.Vector3(-1074.15, 262.55, -2.5), radius: hoopDetectionRadius },
@@ -148,15 +146,21 @@ export class CollisionWorld {
     ]
 
     // dopo un urto, quanto ignorare NUOVE collisioni CON LO STESSO
-    // OGGETTO: con restituzione bassa (rimbalzo morbido voluto) la palla
-    // si allontana dalla superficie molto lentamente — senza questa pausa
-    // il check "sfera dentro il volume espanso" la ricattura ogni singolo
-    // frame. PER OGGETTO (la cooldownMap passata a resolve(), non
-    // posseduta qui): un'unica mappa globale sospendeva TUTTE le
-    // collisioni per 0.3s dopo un rimbalzo qualsiasi — un rimbalzo sul
+    // OGGETTO: la posizione viene già respinta esattamente al bordo del
+    // volume espanso nello stesso passo (vedi resolveSphereBoxCollision),
+    // quindi bastano pochi passi fisici perché la velocità riflessa la
+    // allontani abbastanza da non essere ricatturata subito — non serve
+    // una finestra lunga. PER OGGETTO (la cooldownMap passata a
+    // resolve(), non posseduta qui): un'unica mappa globale sospendeva
+    // TUTTE le collisioni dopo un rimbalzo qualsiasi (un rimbalzo sul
     // ferro seguito da un volo verso la backboard attraversava la
-    // backboard senza mai risultare in collisione
-    this.COLLISION_COOLDOWN = 0.3
+    // backboard). 0.3s (primo tentativo) era comunque troppo lungo:
+    // backboard e ferro sono fisicamente vicini, un rimbalzo sul ferro
+    // seguito a ruota da un ritorno verso la STESSA backboard (entro
+    // 0.3s, tutt'altro che raro alle velocità di tiro in gioco) restava
+    // comunque in cooldown su quell'oggetto specifico e ci passava
+    // attraverso
+    this.COLLISION_COOLDOWN = 0.05
 
     // scratch (riusati ad ogni chiamata, non riallocati) per la matematica
     // di resolveSphereBoxCollision/resolveSphereTorusCollision
