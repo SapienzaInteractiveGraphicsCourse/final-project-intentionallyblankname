@@ -1,0 +1,451 @@
+import * as THREE from 'three'
+import { RobotState } from './robots/RobotBase.js'
+import { BallState } from './Basketball.js'
+import { snapBallToRestPoint, clampOrbitPitchToNormalRange } from './BallPossession.js'
+
+// Quarto e ultimo pezzo del refactor modulare: tiro, hoop assist, punteggio
+// e preview di traiettoria — tutti insieme perché condividono isHoopCrossing/
+// applyHoopAssist/collisionWorld.hoops in modo troppo stretto per separarli
+// senza duplicare codice. Stesso principio di MainMenu.js/BallPossession.js:
+// un unico oggetto context, zero import da main.js (RobotState/BallState
+// importati direttamente, sono foglie). snapBallToRestPoint/
+// clampOrbitPitchToNormalRange importati da BallPossession.js (condivisi,
+// non duplicati — nessun rischio circolare, BallPossession.js non importa
+// mai da qui).
+
+const SHOT_FLOOR_BOUNCE_SPEED_FACTOR = 0.7 // rimbalzo a terra di un tiro sbagliato: vicino a BALL_BOUNCE_SPEED ma un filo più smorzato
+const FLOOR_HORIZONTAL_DAMPING = 0.9
+const THREE_POINT_RADIUS = 677 // distanza reale dal ferro al punto più "alto" dell'arco (accessor GLTF)
+const THREE_POINT_SPEED_REDUCTION = 0.6 // forza ridotta al 60% da dentro l'arco: da vicino serve meno spinta
+// campo potenziale attrattivo verso il centro canestro (stat SHOOTING): un
+// tronco di cono che si allarga salendo, raggio del FERRO esattamente al
+// livello del ferro, più largo (permissivo) salendo fino alla cima della
+// backboard
+const HOOP_ASSIST_TOP_RADIUS = 90
+// tasso di correzione (1/s): quota della distanza residua riassorbita al
+// secondo — correzione di POSIZIONE, non un'accelerazione (quella si
+// accumula col tempo di permanenza nel cono, sparando la palla OLTRE il
+// centro sui tiri lenti/da vicino)
+const HOOP_ASSIST_PULL_RATE = 4
+// abbastanza fine da non "bucare" lo spessore sottile di backboard/ferro
+// nemmeno alla velocità di tiro più alta (tunneling)
+const SHOT_PHYSICS_SUBSTEP_DT = 1 / 240
+const SHOOT_EASE = t => t * t * (3 - 2 * t) // smoothstep, stessa curva usata per 'rise' nel palleggio
+const TRAJECTORY_DT = 0.005 // fine quanto il volo reale (SHOT_PHYSICS_SUBSTEP_DT), non il vecchio 0.02 troppo grezzo
+const TRAJECTORY_MAX_STEPS = 2400 // ~12s allo stesso dt fine
+const TRAJECTORY_TUBE_RADIUS = 4
+const TRAJ_COLOR_BLACK = 0x111111
+const TRAJ_COLOR_BLUE = 0x1b3a6b
+const TRAJ_COLOR_GREEN = 0x2e7d32
+const TRAJECTORY_OPACITY = 0.5
+
+// condivisa da getEffectiveShotSpeed (riduzione potenza) e dal Point System
+// (2 o 3 punti) — stesso identico criterio "vicino a quale canestro", non
+// due calcoli separati che potrebbero disallinearsi
+export function isInsideThreePointArc(worldPosition, hoops) {
+  let nearestDistSq = Infinity
+  for (const hoop of hoops) {
+    const dx = worldPosition.x - hoop.center.x
+    const dz = worldPosition.z - hoop.center.z
+    nearestDistSq = Math.min(nearestDistSq, dx * dx + dz * dz)
+  }
+  return nearestDistSq < THREE_POINT_RADIUS * THREE_POINT_RADIUS
+}
+
+// rilevamento canestro: nessuna vera "mesh trigger", stesso spirito
+// imperativo del resto del progetto — attraversamento del piano orizzontale
+// del ferro (Y), in discesa, entro il raggio del cerchio. previousPos è il
+// vettore COMPLETO del passo precedente (non solo la Y): interpola il punto
+// ESATTO in cui la traiettoria attraversa il piano del ferro, non testa
+// solo la posizione già "oltre" a fine passo — necessario perché un test a
+// campione singolo è sensibile alla grana del passo (tiri che davvero
+// entrano, specialmente da vicino dove la traiettoria è più verticale
+// vicino al ferro, potevano risultare "appena fuori")
+export function isHoopCrossing(previousPos, position, hoop) {
+  if (previousPos.y <= hoop.center.y || position.y > hoop.center.y) return false
+  const t = (previousPos.y - hoop.center.y) / (previousPos.y - position.y)
+  const crossX = THREE.MathUtils.lerp(previousPos.x, position.x, t)
+  const crossZ = THREE.MathUtils.lerp(previousPos.z, position.z, t)
+  const dx = crossX - hoop.center.x
+  const dz = crossZ - hoop.center.z
+  return Math.hypot(dx, dz) <= hoop.radius
+}
+
+// backboard/ferro/muri/pali/panchine: stesso identico giro di controlli
+// serve sia al volo fisico reale sia alla preview di traiettoria — chiamata
+// da entrambi gli step fisici così la preview mostra ESATTAMENTE la curva
+// che poi succede davvero, non è un bias nascosto solo a runtime
+function applyHoopAssist(position, velocity, dt, strength, hoops, backboardTopY, rimRingRadius) {
+  if (strength <= 0) return
+  for (const hoop of hoops) {
+    const heightAboveRim = position.y - hoop.center.y
+    // altezza del cono = dalla cima reale della backboard, non un valore a
+    // caso — sopra la backboard il tiro è comunque ormai "andato"
+    const assistHeight = backboardTopY - hoop.center.y
+    if (heightAboveRim < 0 || heightAboveRim > assistHeight) continue
+    const coneT = heightAboveRim / assistHeight
+    const coneRadius = THREE.MathUtils.lerp(rimRingRadius, HOOP_ASSIST_TOP_RADIUS, coneT)
+    const dx = hoop.center.x - position.x
+    const dz = hoop.center.z - position.z
+    const dist = Math.hypot(dx, dz)
+    if (dist < 1e-6 || dist > coneRadius) continue
+    // correzione di POSIZIONE (frazione della distanza residua verso il
+    // centro): clampata a 1, non può mai superare il centro qualunque sia
+    // strength/dt
+    const pull = Math.min(strength * (dist / coneRadius) * HOOP_ASSIST_PULL_RATE * dt, 1)
+    position.x += dx * pull
+    position.z += dz * pull
+  }
+}
+
+// scala SHOOTING 1-3: 1 = NESSUNA correzione, 2/3 = via via più forte — fit
+// quadratico esatto sui tre punti storici (vecchia scala 1-5): (stat-1)(stat+4)/8
+export function shootingStatToAssistStrength(shootingStat) {
+  return (shootingStat - 1) * (shootingStat + 4) / 8
+}
+
+export function initShootingSystem(ctx) {
+  const {
+    manipulator, camera, collisionWorld, sfx, scene,
+    shootingState, shootTuning, cameraState, dribbleState, handlingState,
+    orbitPitchMin, orbitPitchMax,
+    computeAimPitchOffset, getCrosshairHeight, getBallRadius, ballGravity, ballBounceSpeed,
+  } = ctx
+  // basketball NON destrutturato: è un getter su ctx (main.js lo assegna in
+  // modo asincrono al caricamento del GLTF) — va letto via ctx.basketball
+  // ogni volta, non catturato una volta sola, stesso pattern di BallPossession.js
+
+  const shotFloorBounceSpeed = ballBounceSpeed * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
+
+  const shootRaycaster = new THREE.Raycaster()
+  const crosshairNDC = new THREE.Vector2()
+  // Direzione: raycast dalla camera attraverso il PIXEL del crosshair (non
+  // il centro schermo) — in HANDLING la camera ha un orientamento libero
+  // vero (quaternion, non lookAt), quindi quel raggio è esattamente dove
+  // il giocatore sta mirando
+  function getShotDirection(out) {
+    crosshairNDC.set(0, (2 * getCrosshairHeight()) / window.innerHeight)
+    shootRaycaster.setFromCamera(crosshairNDC, camera)
+    return out.copy(shootRaycaster.ray.direction)
+  }
+
+  function getEffectiveShotSpeed(worldPosition) {
+    return isInsideThreePointArc(worldPosition, collisionWorld.hoops) ? shootTuning.shotSpeed * THREE_POINT_SPEED_REDUCTION : shootTuning.shotSpeed
+  }
+
+  // Point System: 2 punti se si tirava da dentro l'arco dei 3 punti, 3 se da
+  // fuori (shootingState.wasInsideArc, catturato al rilascio — non dove si
+  // trova la palla quando entra), canestro in uno qualunque dei due ferri vale
+  let score = 0
+  const scoreValueEl = document.getElementById('score-value')
+  function addScore(points) {
+    score += points
+    scoreValueEl.textContent = String(score)
+  }
+  // per BACK TO MAIN MENU (MainMenu.js): resetta punteggio e DOM in un colpo
+  // solo, senza far ricostruire a main.js "reset" da addScore/uno stato che
+  // non gli appartiene
+  function resetScore() {
+    score = 0
+    scoreValueEl.textContent = String(score)
+  }
+
+  function checkHoopScore(previousPos, position) {
+    for (const hoop of collisionWorld.hoops) {
+      if (isHoopCrossing(previousPos, position, hoop)) {
+        console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
+        addScore(shootingState.wasInsideArc ? 2 : 3)
+        sfx.playScore()
+      }
+    }
+  }
+
+  // dopo un urto (backboard/ferro/...), quanto ignorare NUOVE collisioni CON
+  // LO STESSO OGGETTO — vedi CollisionWorld.js per il dettaglio del perché
+  // (per-oggetto, non un timer globale, altrimenti un rimbalzo sul ferro
+  // sospenderebbe anche il check contro la backboard)
+  const shotCollisionCooldowns = new Map()
+  function clearAllCollisionCooldowns() {
+    shotCollisionCooldowns.clear()
+  }
+
+  const shotVelocity = new THREE.Vector3()
+  const scratchPreviousShotPos = new THREE.Vector3()
+  function stepShotFlight(dt) {
+    // ctx.basketball è un getter (assegnato in modo asincrono al caricamento
+    // del GLTF) — la reference non cambia mai a metà di questa singola
+    // chiamata, quindi si legge una volta sola invece di rivalutarla ad ogni
+    // accesso
+    const ball = ctx.basketball
+    const ballRadius = getBallRadius()
+    // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto
+    // esatto di attraversamento del piano del ferro, le serve X/Z di prima
+    scratchPreviousShotPos.copy(ball.position)
+    shotVelocity.y -= ballGravity * dt
+    ball.position.addScaledVector(shotVelocity, dt)
+    applyHoopAssist(
+      ball.position, shotVelocity, dt,
+      shootingStatToAssistStrength(manipulator.stats.shooting),
+      collisionWorld.hoops, collisionWorld.BACKBOARD_TOP_Y, ctx.rimRingRadius,
+    )
+
+    // canestro controllato SUL PERCORSO BALISTICO PURO, prima di eventuale
+    // deflessione da collisione in questo stesso passo — stesso ordine già
+    // usato dalla preview (hitScore calcolato prima di hitVisible/resolve)
+    checkHoopScore(scratchPreviousShotPos, ball.position)
+    // solo nel volo reale (non nella preview, che condivide la stessa
+    // funzione ma non deve mai suonare mentre si sta solo mirando)
+    if (collisionWorld.resolve(ball.position, shotVelocity, dt, shotCollisionCooldowns, ballRadius)) sfx.playBounce()
+
+    if (ball.position.y <= ballRadius) {
+      ball.position.y = ballRadius
+      sfx.playBounce()
+      // vicino al rimbalzo del palleggio automatico ma un filo più
+      // smorzato — un tiro sbagliato rimbalza come farebbe la palla vera
+      // invece di fermarsi di colpo
+      shotVelocity.y = shotFloorBounceSpeed
+      // senza smorzare anche X/Z la palla scivolerebbe in orizzontale per
+      // sempre (solo Y viene mai toccata altrimenti)
+      shotVelocity.x *= FLOOR_HORIZONTAL_DAMPING
+      shotVelocity.z *= FLOOR_HORIZONTAL_DAMPING
+    }
+  }
+  function updateShotFlight(delta) {
+    let remaining = delta
+    while (remaining > 0) {
+      stepShotFlight(Math.min(SHOT_PHYSICS_SUBSTEP_DT, remaining))
+      remaining -= SHOT_PHYSICS_SUBSTEP_DT
+    }
+  }
+
+  // Animazione di tiro: PRIMA di tutto (ogni frame, windup e release) il
+  // gomito insegue il pitch della camera (shootTuning.elbowAimCoupling) —
+  // l'end effector punta dove punta la mira. Sopra questa base, 'windup'
+  // porta gomito/link1 ulteriormente all'indietro, poi 'release' li
+  // riporta in avanti verso la posa di rilascio — il gomito parte con un
+  // piccolo ritardo (shootTuning.releaseLead) rispetto a link1 e copre
+  // tutto il suo raggio nel tempo RIMANENTE, quindi con velocità angolare
+  // maggiore: il "colpo di frusta" prossimale→distale di un lancio vero.
+  // Infine 'recover' interpola tutto verso una posa neutra
+  function updateShootAnimation(delta) {
+    shootingState.phaseT += delta
+    const elbowWindupTarget = THREE.MathUtils.degToRad(shootTuning.elbowWindupDeg)
+    const link1WindupTarget = THREE.MathUtils.degToRad(shootTuning.link1WindupDeg)
+    const aimPitchOffset = computeAimPitchOffset()
+
+    // countdown SEMPRE attivo (non solo durante 'release'): se
+    // stateTransitionDelay supera il tempo che resta alla fase 'release'
+    // dopo releasePoint, la fase passa a 'recover' col timer ancora a metà
+    // — se il countdown vivesse solo dentro il branch 'release' si blocca
+    // lì per sempre e NO_BALL/basketball FREE non scattano mai
+    if (shootingState.released && shootingState.stateTransitionTimer > 0) {
+      shootingState.stateTransitionTimer -= delta
+      if (shootingState.stateTransitionTimer <= 0) {
+        manipulator.setState(RobotState.NO_BALL)
+        ctx.basketball.setState(BallState.FREE)
+        // stessa sicurezza di releaseBallHandling(): il clamp esteso di
+        // HANDLING è valido solo lì — appena si esce la camera passa alla
+        // formula normale, che con un pitch estremo manda la camera sotto
+        // il pavimento (mai riclampata altrimenti fino al prossimo mousemove)
+        clampOrbitPitchToNormalRange(cameraState, orbitPitchMin, orbitPitchMax)
+      }
+    }
+
+    if (shootingState.phase === 'windup') {
+      const t = SHOOT_EASE(Math.min(shootingState.phaseT / shootTuning.windupDuration, 1))
+      const elbowOffset = THREE.MathUtils.lerp(shootingState.startElbowOffset, elbowWindupTarget, t)
+      const link1Offset = THREE.MathUtils.lerp(shootingState.startLink1Offset, link1WindupTarget, t)
+      manipulator.controls.setAimPitch(aimPitchOffset)
+      manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
+      // tre fasi, non due: orizzontale (startTilt, ≈0 da HANDLING) → su
+      // (tiltWindupPeak, oltre il piatto) qui nel windup, poi 'release' la
+      // riporta da lì verso la posa inclinata di rilascio
+      manipulator.controls.setShootTilt(THREE.MathUtils.lerp(shootingState.startTilt, shootTuning.tiltWindupPeak, t))
+      if (shootingState.phaseT >= shootTuning.windupDuration) { shootingState.phase = 'release'; shootingState.phaseT = 0 }
+    } else if (shootingState.phase === 'release') {
+      const t = Math.min(shootingState.phaseT / shootTuning.releaseDuration, 1)
+      const easeT = SHOOT_EASE(t)
+      const link1Offset = THREE.MathUtils.lerp(link1WindupTarget, THREE.MathUtils.degToRad(shootTuning.link1ReleaseDeg), easeT)
+      // il gomito parte con un ritardo, poi copre tutto il suo raggio nel
+      // tempo rimanente — stessa durata totale di link1 ma partenza
+      // posticipata = velocità angolare maggiore
+      const elbowT = SHOOT_EASE(THREE.MathUtils.clamp((t - shootTuning.releaseLead) / (1 - shootTuning.releaseLead), 0, 1))
+      const elbowOffset = THREE.MathUtils.lerp(elbowWindupTarget, THREE.MathUtils.degToRad(shootTuning.elbowReleaseDeg), elbowT)
+      manipulator.controls.setAimPitch(aimPitchOffset)
+      manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
+      // dal picco 'su' del windup verso la posa inclinata di rilascio, in
+      // sincrono con link1 (stessa easeT) — non da startTilt (quello era
+      // il punto di partenza del windup, non di questa fase)
+      manipulator.controls.setShootTilt(THREE.MathUtils.lerp(shootTuning.tiltWindupPeak, shootTuning.tiltTarget, easeT))
+
+      if (!shootingState.released && t >= shootTuning.releasePoint) {
+        getShotDirection(shotVelocity).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
+        shootingState.wasInsideArc = isInsideThreePointArc(manipulator.root.position, collisionWorld.hoops)
+        shootingState.released = true
+        sfx.playShoot()
+        // NON manipulator.setState(NO_BALL) qui: farlo nello STESSO istante
+        // in cui parte il volo sgancia subito la camera dalla vista libera
+        // di HANDLING, quindi il crosshair salta via proprio mentre la
+        // palla lascia la mano. Il cambio di stato vero parte solo dopo
+        // stateTransitionDelay secondi, per sicurezza — updateShotFlight
+        // nel frattempo parte comunque (vedi guardia su shootingState.released)
+        shootingState.stateTransitionTimer = shootTuning.stateTransitionDelay
+      }
+      if (shootingState.phaseT >= shootTuning.releaseDuration) {
+        shootingState.phase = 'recover'
+        shootingState.phaseT = 0
+        shootingState.recoverStartAimPitch = aimPitchOffset
+      }
+    } else { // 'recover'
+      const t = SHOOT_EASE(Math.min(shootingState.phaseT / shootTuning.recoverDuration, 1))
+      const elbowOffset = THREE.MathUtils.lerp(THREE.MathUtils.degToRad(shootTuning.elbowReleaseDeg), 0, t)
+      const link1Offset = THREE.MathUtils.lerp(THREE.MathUtils.degToRad(shootTuning.link1ReleaseDeg), 0, t)
+      const recoverAimPitch = THREE.MathUtils.lerp(shootingState.recoverStartAimPitch, 0, t)
+      const tiltOffset = THREE.MathUtils.lerp(shootTuning.tiltTarget, 0, t)
+      const gripOffset = THREE.MathUtils.lerp(shootingState.startGrip, 0, t)
+      manipulator.controls.setAimPitch(recoverAimPitch)
+      manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
+      manipulator.controls.setShootTilt(tiltOffset)
+      manipulator.controls.setGrip(gripOffset)
+      handlingState.grip = gripOffset
+
+      if (shootingState.phaseT >= shootTuning.recoverDuration) {
+        shootingState.phase = 'idle'
+        // dribbleState.armEase (uno scalare unico) non può rappresentare le
+        // pose indipendenti usate sopra: riparte da zero, ma solo ORA che
+        // la posa VISIVA è già a 0 (fine del lerp appena sopra) — nessuno
+        // scatto, armEase=0 produce esattamente la stessa posa già raggiunta
+        dribbleState.armEase = 0
+      }
+    }
+
+    // finché la palla non è ancora partita resta incollata alla paletta,
+    // stessa logica di updateHandling/updateDribble
+    if (!shootingState.released) {
+      // stesso motivo di updateHandling: manipulator.ballRestPoint segue il
+      // vero punto di convergenza della V, corretto per qualunque tilt
+      snapBallToRestPoint(manipulator, ctx.basketball)
+    }
+  }
+
+  // --- Preview di traiettoria (solo mentre si mira in HANDLING) ---
+  const trajectoryBlackMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLACK, transparent: true, opacity: TRAJECTORY_OPACITY })
+  const trajectoryColoredMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLUE, transparent: true, opacity: TRAJECTORY_OPACITY })
+  let trajectoryBlackMesh = null
+  let trajectoryColoredMesh = null
+
+  // ricostruisce (dispose + nuova, TubeGeometry non si aggiorna in place)
+  // la mesh-tubo per un tratto di punti — null se meno di 2 punti
+  function rebuildTrajectoryTube(existingMesh, points, material) {
+    if (existingMesh) {
+      scene.remove(existingMesh)
+      existingMesh.geometry.dispose()
+    }
+    if (points.length < 2) return null
+    const curve = new THREE.CatmullRomCurve3(points)
+    const tubularSegments = Math.min(points.length * 3, 150)
+    const geometry = new THREE.TubeGeometry(curve, tubularSegments, TRAJECTORY_TUBE_RADIUS, 6, false)
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.frustumCulled = false
+    scene.add(mesh)
+    return mesh
+  }
+
+  // rimuove entrambe le mesh-tubo dalla scena (fuori da HANDLING, o a tiro
+  // già rilasciato)
+  function hideTrajectoryPreview() {
+    if (trajectoryBlackMesh) { scene.remove(trajectoryBlackMesh); trajectoryBlackMesh.geometry.dispose(); trajectoryBlackMesh = null }
+    if (trajectoryColoredMesh) { scene.remove(trajectoryColoredMesh); trajectoryColoredMesh.geometry.dispose(); trajectoryColoredMesh = null }
+  }
+
+  const trajPos = new THREE.Vector3()
+  const trajVel = new THREE.Vector3()
+  const trajBlackPoints = []
+  const trajColoredPoints = []
+  // diagnostica per il pannello CAMERA (tasto P)
+  const trajDebug = { count: 0, stopReason: '—' }
+
+  function updateTrajectoryPreview() {
+    // NOTA: usa la posa di mira ATTUALE (quella che updateHandling ha
+    // appena applicato), non quella di rilascio effettivo — un tentativo
+    // di simulare la posa di rilascio esatta è stato provato e scartato:
+    // con mira bassa/di lato produceva un'origine innaturale
+    trajPos.copy(ctx.basketball.position)
+    getShotDirection(trajVel).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
+
+    trajBlackPoints.length = 0
+    trajColoredPoints.length = 0
+    let coloredMaterialColor = TRAJ_COLOR_BLUE
+    let collided = false
+    // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto
+    // esatto di attraversamento del piano del ferro
+    const previousTrajPos = trajPos.clone()
+    trajBlackPoints.push(trajPos.clone())
+
+    const hoopAssistStrength = shootingStatToAssistStrength(manipulator.stats.shooting)
+    const ballRadius = getBallRadius()
+    // mappa dei cooldown SEPARATA dal volo reale: la preview simula un tiro
+    // ipotetico ogni frame mentre si mira, non deve "consumare" il
+    // cooldown degli oggetti reali prima che il tiro vero parta davvero
+    const previewCollisionCooldowns = new Map()
+    for (let i = 0; i < TRAJECTORY_MAX_STEPS; i++) {
+      trajVel.y -= ballGravity * TRAJECTORY_DT
+      trajPos.addScaledVector(trajVel, TRAJECTORY_DT)
+      applyHoopAssist(trajPos, trajVel, TRAJECTORY_DT, hoopAssistStrength, collisionWorld.hoops, collisionWorld.BACKBOARD_TOP_Y, ctx.rimRingRadius)
+
+      // canestro: stesso criterio di checkHoopScore — controllato SEMPRE,
+      // anche dopo un tocco su ferro/backboard (un tiro può toccare il
+      // ferro e poi entrare)
+      let hitScore = false
+      for (const hoop of collisionWorld.hoops) {
+        if (isHoopCrossing(previousTrajPos, trajPos, hoop)) hitScore = true
+      }
+      // backboard/ferro/muri/pali/panchine: rilevanti SOLO per decidere
+      // quando finisce il tratto nero — una volta "collided" non contano
+      // più (il canestro può ancora ricolorare in verde)
+      const hitVisible = !collided && collisionWorld.resolve(trajPos, trajVel, TRAJECTORY_DT, previewCollisionCooldowns, ballRadius)
+      // pavimento: qui resta uno stop secco (a differenza del volo reale,
+      // che rimbalza) — la preview si ferma alla prima cosa "interessante" toccata
+      let hitFloor = false
+      if (!hitScore && !hitVisible && trajPos.y <= ballRadius) {
+        trajPos.y = ballRadius
+        trajVel.set(0, 0, 0)
+        hitFloor = true
+      }
+      previousTrajPos.copy(trajPos)
+
+      if (hitScore) {
+        // priorità assoluta sul colore: anche se si era già "collided"
+        // (blu, toccato il ferro un attimo prima), un canestro vero
+        // ricolora tutto il tratto in verde
+        coloredMaterialColor = TRAJ_COLOR_GREEN
+        if (!collided) { trajBlackPoints.push(trajPos.clone()); collided = true }
+        trajColoredPoints.push(trajPos.clone())
+      } else if (hitVisible) {
+        coloredMaterialColor = TRAJ_COLOR_BLUE
+        trajBlackPoints.push(trajPos.clone())
+        collided = true
+        trajColoredPoints.push(trajPos.clone())
+      } else if (!collided) {
+        trajBlackPoints.push(trajPos.clone())
+      } else {
+        trajColoredPoints.push(trajPos.clone())
+      }
+
+      if (hitFloor) { trajDebug.stopReason = 'pavimento'; break }
+      if (i === TRAJECTORY_MAX_STEPS - 1) trajDebug.stopReason = 'budget esaurito (mai toccato nulla)'
+    }
+    trajDebug.count = trajBlackPoints.length + trajColoredPoints.length
+
+    trajectoryColoredMaterial.color.set(coloredMaterialColor)
+    trajectoryBlackMesh = rebuildTrajectoryTube(trajectoryBlackMesh, trajBlackPoints, trajectoryBlackMaterial)
+    trajectoryColoredMesh = rebuildTrajectoryTube(trajectoryColoredMesh, trajColoredPoints, trajectoryColoredMaterial)
+  }
+
+  return {
+    getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc: pos => isInsideThreePointArc(pos, collisionWorld.hoops),
+    addScore, resetScore, checkHoopScore, clearAllCollisionCooldowns,
+    updateShotFlight, updateShootAnimation, updateTrajectoryPreview, hideTrajectoryPreview,
+    shotVelocity, trajDebug,
+  }
+}
