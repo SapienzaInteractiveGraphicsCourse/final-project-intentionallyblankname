@@ -401,6 +401,10 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
 // Manipulator Animation → Dribble), dichiarate qui perché lette già dal
 // setup del debug menu più sotto, prima del blocco fisica nel render loop
 let BALL_RADIUS = 15 // unità mondo (~cm-scale) — sfera sorgente ha raggio 1
+// fattore colore della color map del pallone — >1 schiarisce (il fattore
+// moltiplica il texel, non è clampato a 1) senza tingere, a differenza di
+// un colore/tint diverso da bianco
+const BALL_COLOR_BRIGHTNESS = 1.15
 // const (non più regolabili da debug): valori fissati dopo il tuning
 const BALL_GRAVITY = 820       // unità/s² (scena ≈ cm-scale), non più il valore g reale
 const BALL_BOUNCE_SPEED = 415  // velocità impressa ad ogni rimbalzo (palleggio automatico)
@@ -437,8 +441,9 @@ function isInsideThreePointArc(worldPosition) {
   return nearestDistSq < THREE_POINT_RADIUS * THREE_POINT_RADIUS
 }
 
+const THREE_POINT_SPEED_REDUCTION = 0.6 // forza ridotta al 60% da dentro l'arco: da vicino serve meno spinta
 function getEffectiveShotSpeed(worldPosition) {
-  return isInsideThreePointArc(worldPosition) ? SHOT_SPEED * 0.6 : SHOT_SPEED
+  return isInsideThreePointArc(worldPosition) ? SHOT_SPEED * THREE_POINT_SPEED_REDUCTION : SHOT_SPEED
 }
 // campo potenziale attrattivo verso il centro canestro (stat SHOOTING) — un
 // tronco di cono che si allarga salendo, non un raggio costante per tutta
@@ -602,7 +607,7 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
     // materiale moltiplica il texel, non è clampato a 1 — va oltre il
     // bianco pieno invece di tingere, che è esattamente "un po' più
     // luminoso" invece di un cambio di tonalità)
-    if (child.material?.color) child.material.color.multiplyScalar(1.15)
+    if (child.material?.color) child.material.color.multiplyScalar(BALL_COLOR_BRIGHTNESS)
   })
   basketball = new Basketball(gltf.scene)
   // il robot parte già in possesso della palla (palleggio automatico da
@@ -644,11 +649,12 @@ const TRAJECTORY_TUBE_RADIUS = 4       // unità mondo
 const TRAJ_COLOR_BLACK = 0x111111
 const TRAJ_COLOR_BLUE = 0x1b3a6b
 const TRAJ_COLOR_GREEN = 0x2e7d32
+const TRAJECTORY_OPACITY = 0.5
 // depthTest normale (a differenza del tentativo con Line2): è geometria 3D
 // vera, deve sparire dietro il ferro/backboard come farebbe la palla reale
 // passandoci dietro — non un overlay che deve sempre stare sopra a tutto
-const trajectoryBlackMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLACK, transparent: true, opacity: 0.5 })
-const trajectoryColoredMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLUE, transparent: true, opacity: 0.5 })
+const trajectoryBlackMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLACK, transparent: true, opacity: TRAJECTORY_OPACITY })
+const trajectoryColoredMaterial = new THREE.MeshBasicMaterial({ color: TRAJ_COLOR_BLUE, transparent: true, opacity: TRAJECTORY_OPACITY })
 let trajectoryBlackMesh = null
 let trajectoryColoredMesh = null
 
@@ -1001,6 +1007,7 @@ copyConfigBtn.textContent = 'Copy config'
 const copyConfigFeedback = document.createElement('div')
 copyConfigFeedback.id = 'copy-config-feedback'
 debugPanel.append(copyConfigBtn, copyConfigFeedback)
+const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms prima che il messaggio "Copiato" sparisca
 
 copyConfigBtn.addEventListener('click', async () => {
   const c = {
@@ -1028,7 +1035,7 @@ copyConfigBtn.addEventListener('click', async () => {
   } catch {
     copyConfigFeedback.textContent = text
   }
-  setTimeout(() => { copyConfigFeedback.textContent = '' }, 2500)
+  setTimeout(() => { copyConfigFeedback.textContent = '' }, COPY_CONFIG_FEEDBACK_DURATION)
 })
 
 // --- Pannello Camera (posizione + angoli, sola lettura) ---
@@ -1528,6 +1535,10 @@ let dribbleAccumulator = 0
 
 // --- Loop ---
 const clock = new THREE.Clock()
+// tetto al delta per frame (tab in background, hitch): evita che un salto
+// enorme faccia "saltare" fisica/animazioni in un colpo solo. Stesso valore
+// usato anche dal clock indipendente della preview robot nel Main Menu
+const MAX_DELTA = 0.1
 
 // Simulazione del palleggio estratta a parte (non solo inline in
 // updateDribble): stessa identica macchina a stati/fisica, ma parametrizzata
@@ -1655,6 +1666,9 @@ const realDribbleState = {
   ballVelocityY: 0, previousPushPaddleY: null, riseBallisticY: 0,
   lockOffset: null, // assegnato sotto: è lo stesso oggetto lockOffset già dichiarato a modulo
 }
+// volume ridotto per il thump del palleggio automatico: non si ferma mai,
+// a piena intensità (1) diventava fastidioso in loop continuo
+const DRIBBLE_BOUNCE_SOUND_VOLUME = 0.35
 // Palleggio: unica funzione chiamata a passo fisso (vedi accumulator in
 // animate()). dt è sempre DRIBBLE_FIXED_DT, mai il delta di rendering.
 function updateDribble(dt) {
@@ -1665,7 +1679,7 @@ function updateDribble(dt) {
   realDribbleState.previousPushPaddleY = previousPushPaddleY
   realDribbleState.riseBallisticY = riseBallisticY
   realDribbleState.lockOffset = lockOffset
-  stepDribble(realDribbleState, manipulator, basketball.position, dt, () => sfx.playBounce(0.35))
+  stepDribble(realDribbleState, manipulator, basketball.position, dt, () => sfx.playBounce(DRIBBLE_BOUNCE_SOUND_VOLUME))
   dribblePhase = realDribbleState.phase
   dribblePhaseT = realDribbleState.phaseT
   dribbleArmEase = realDribbleState.armEase
@@ -2305,7 +2319,10 @@ function renderRobotCardPreview() {
   // durante la spinta uscirebbe dal frame) — distanza minima per
   // contenere tutti gli 8 angoli nel frustum, vista di 3/4 dall'alto
   const box = new THREE.Box3().setFromObject(previewRobot.root)
-  box.expandByVector(new THREE.Vector3(BALL_RADIUS, BALL_RADIUS * 2, BALL_RADIUS))
+  // margine verticale doppio rispetto a X/Z: la palla scende fin quasi al
+  // pavimento durante drop/rise, non solo di un raggio come in orizzontale
+  const PREVIEW_BALL_VERTICAL_MARGIN_FACTOR = 2
+  box.expandByVector(new THREE.Vector3(BALL_RADIUS, BALL_RADIUS * PREVIEW_BALL_VERTICAL_MARGIN_FACTOR, BALL_RADIUS))
   const center = box.getCenter(new THREE.Vector3())
   const viewDir = new THREE.Vector3(0.9, 0.55, 1).normalize()
   const halfFovRad = THREE.MathUtils.degToRad(previewCamera.fov / 2)
@@ -2343,7 +2360,7 @@ function renderRobotCardPreview() {
   function tickPreview() {
     requestAnimationFrame(tickPreview)
     if (!menuState.robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
-    const dt = Math.min(previewClock.getDelta(), 0.1) // stesso clamp del delta principale in animate()
+    const dt = Math.min(previewClock.getDelta(), MAX_DELTA)
     stepDribble(previewDribbleState, previewRobot, previewBall.position, dt)
     previewRenderer.render(previewScene, previewCamera)
   }
@@ -2421,7 +2438,7 @@ function updateBallSpin(dt) {
 
 function animate() {
   requestAnimationFrame(animate)
-  const delta = Math.min(clock.getDelta(), 0.1)
+  const delta = Math.min(clock.getDelta(), MAX_DELTA)
 
   // mentre il main menu è aperto: solo l'orbita lenta della camera, niente
   // altro (palleggio/fisica/input di gioco fermi, il campo è "vuoto" per
