@@ -237,20 +237,30 @@ export class CollisionWorld {
     return false
   }
 
+  // helper condiviso dai 4 giri box (backboard/muri/pali/panchine) dentro
+  // resolve() — metodo vero (sul prototype, nessuna allocazione ad ogni
+  // chiamata), non una closure locale ricreata ogni volta: resolve() gira
+  // a 120Hz (palleggio)/240Hz (volo di tiro)/fino a 2400 volte per frame
+  // (preview di traiettoria), una nuova arrow function per chiamata sarebbe
+  // pressione GC pura in un hot path
+  resolveBoxAt(box, restitution, position, velocity, dt, cooldownMap, ballRadius) {
+    if (this.isOnCooldown(box, dt, cooldownMap)) return false
+    if (this.resolveSphereBoxCollision(position, velocity, box, ballRadius, restitution)) {
+      cooldownMap.set(box, this.COLLISION_COOLDOWN)
+      return true
+    }
+    return false
+  }
+
   // backboard/ferro/muri/pali/panchine: stesso identico giro di controlli
   // per il volo fisico reale E la preview di traiettoria — un nuovo tipo
   // di collidable va aggiunto qui una volta sola, non in due posti
   // separati. Ritorna true se almeno un urto è avvenuto in questa chiamata
   resolve(position, velocity, dt, cooldownMap, ballRadius) {
     let hit = false
-    const resolveBox = (box, restitution) => {
-      if (this.isOnCooldown(box, dt, cooldownMap)) return
-      if (this.resolveSphereBoxCollision(position, velocity, box, ballRadius, restitution)) {
-        hit = true
-        cooldownMap.set(box, this.COLLISION_COOLDOWN)
-      }
+    for (const box of this.backboardBoxes) {
+      if (this.resolveBoxAt(box, this.BACKBOARD_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
     }
-    for (const box of this.backboardBoxes) resolveBox(box, this.BACKBOARD_RESTITUTION)
     for (const hoop of this.hoops) {
       if (this.isOnCooldown(hoop, dt, cooldownMap)) continue
       if (this.resolveSphereTorusCollision(position, velocity, hoop.center, RIM_RING_RADIUS, RIM_TUBE_RADIUS, ballRadius, this.RIM_RESTITUTION)) {
@@ -260,9 +270,15 @@ export class CollisionWorld {
     }
     // muri e pali: oggetti rigidi, restituzione più viva della backboard
     // (che è smorzata apposta)
-    for (const box of this.wallBoxes) resolveBox(box, this.WALL_RESTITUTION)
-    for (const box of this.poleBoxes) resolveBox(box, this.POLE_RESTITUTION)
-    for (const box of this.benchBoxes) resolveBox(box, this.BENCH_RESTITUTION)
+    for (const box of this.wallBoxes) {
+      if (this.resolveBoxAt(box, this.WALL_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
+    }
+    for (const box of this.poleBoxes) {
+      if (this.resolveBoxAt(box, this.POLE_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
+    }
+    for (const box of this.benchBoxes) {
+      if (this.resolveBoxAt(box, this.BENCH_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
+    }
     return hit
   }
 }

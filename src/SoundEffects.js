@@ -60,6 +60,16 @@ export class SoundEffects {
     return buffer
   }
 
+  // inviluppo condiviso dai 4 gain node sotto (score, bounce body, bounce
+  // contact, shoot): silenzio → attacco lineare (evita il "click" di un
+  // salto istantaneo da 0 al picco) → decadimento esponenziale fino quasi a
+  // zero (0.001, mai 0 esatto: exponentialRampToValueAtTime non accetta 0)
+  _applyEnvelope(gainNode, startTime, peakGain, attackTime, duration) {
+    gainNode.gain.setValueAtTime(0, startTime)
+    gainNode.gain.linearRampToValueAtTime(peakGain, startTime + attackTime)
+    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
+  }
+
   // piccolo "campanello" a due note ascendenti: due oscillatori sinusoidali
   // in sequenza, stesso spirito "generato in codice" delle texture PBR del
   // robot. Piccolo attacco lineare (evita il "click" di un salto istantaneo
@@ -72,9 +82,7 @@ export class SoundEffects {
       const gain = ctx.createGain()
       oscillator.type = 'sine'
       oscillator.frequency.value = freq
-      gain.gain.setValueAtTime(0, startTime)
-      gain.gain.linearRampToValueAtTime(SCORE_PEAK_GAIN, startTime + SCORE_ATTACK_TIME)
-      gain.gain.exponentialRampToValueAtTime(0.001, startTime + SCORE_DURATION)
+      this._applyEnvelope(gain, startTime, SCORE_PEAK_GAIN, SCORE_ATTACK_TIME, SCORE_DURATION)
       oscillator.connect(gain)
       gain.connect(this.listener.getInput())
       oscillator.start(startTime)
@@ -99,9 +107,7 @@ export class SoundEffects {
     body.type = 'sine'
     body.frequency.setValueAtTime(BOUNCE_BODY_FREQ_START, t)
     body.frequency.exponentialRampToValueAtTime(BOUNCE_BODY_FREQ_END, t + BOUNCE_BODY_SWEEP_TIME)
-    bodyGain.gain.setValueAtTime(0, t)
-    bodyGain.gain.linearRampToValueAtTime(BOUNCE_BODY_PEAK_GAIN * volumeScale, t + BOUNCE_BODY_ATTACK_TIME)
-    bodyGain.gain.exponentialRampToValueAtTime(0.001, t + BOUNCE_BODY_DURATION)
+    this._applyEnvelope(bodyGain, t, BOUNCE_BODY_PEAK_GAIN * volumeScale, BOUNCE_BODY_ATTACK_TIME, BOUNCE_BODY_DURATION)
     body.connect(bodyGain)
     bodyGain.connect(this.listener.getInput())
     body.start(t)
@@ -115,9 +121,7 @@ export class SoundEffects {
     contactFilter.type = 'lowpass'
     contactFilter.frequency.value = BOUNCE_CONTACT_LOWPASS_FREQ
     const contactGain = ctx.createGain()
-    contactGain.gain.setValueAtTime(0, t)
-    contactGain.gain.linearRampToValueAtTime(BOUNCE_CONTACT_PEAK_GAIN * volumeScale, t + BOUNCE_CONTACT_ATTACK_TIME)
-    contactGain.gain.exponentialRampToValueAtTime(0.001, t + BOUNCE_CONTACT_DURATION)
+    this._applyEnvelope(contactGain, t, BOUNCE_CONTACT_PEAK_GAIN * volumeScale, BOUNCE_CONTACT_ATTACK_TIME, BOUNCE_CONTACT_DURATION)
     contact.connect(contactFilter)
     contactFilter.connect(contactGain)
     contactGain.connect(this.listener.getInput())
@@ -140,9 +144,7 @@ export class SoundEffects {
     filter.frequency.setValueAtTime(SHOOT_FREQ_START, t)
     filter.frequency.exponentialRampToValueAtTime(SHOOT_FREQ_END, t + SHOOT_SWEEP_TIME)
     const gain = ctx.createGain()
-    gain.gain.setValueAtTime(0, t)
-    gain.gain.linearRampToValueAtTime(SHOOT_PEAK_GAIN, t + SHOOT_ATTACK_TIME)
-    gain.gain.exponentialRampToValueAtTime(0.001, t + SHOOT_DURATION)
+    this._applyEnvelope(gain, t, SHOOT_PEAK_GAIN, SHOOT_ATTACK_TIME, SHOOT_DURATION)
     noise.connect(filter)
     filter.connect(gain)
     gain.connect(this.listener.getInput())

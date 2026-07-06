@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { snapBallToRestPoint, clampOrbitPitchToNormalRange } from './BallPossession.js'
+import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from './constants.js'
 
 // Quarto e ultimo pezzo del refactor modulare: tiro, hoop assist, punteggio
 // e preview di traiettoria — tutti insieme perché condividono isHoopCrossing/
@@ -108,14 +109,18 @@ export function initShootingSystem(ctx) {
   const {
     manipulator, camera, collisionWorld, sfx, scene,
     shootingState, shootTuning, cameraState, dribbleState, handlingState,
-    orbitPitchMin, orbitPitchMax,
-    computeAimPitchOffset, getCrosshairHeight, getBallRadius, ballGravity, ballBounceSpeed,
+    computeAimPitchOffset, getCrosshairHeight, getBallRadius,
   } = ctx
-  // basketball NON destrutturato: è un getter su ctx (main.js lo assegna in
-  // modo asincrono al caricamento del GLTF) — va letto via ctx.basketball
-  // ogni volta, non catturato una volta sola, stesso pattern di BallPossession.js
+  // getBasketball NON destrutturato: è una funzione, non un valore semplice
+  // (main.js assegna basketball in modo asincrono al caricamento del GLTF) —
+  // va richiamata via ctx.getBasketball() ogni volta, non catturata una
+  // volta sola, stesso pattern di BallPossession.js. Funzione e non un
+  // accessor `get` perché ctx nasce da uno spread (gameContext in main.js):
+  // un accessor verrebbe valutato subito dallo spread, congelando il
+  // risultato — una funzione sopravvive perché lo spread copia il
+  // riferimento alla funzione, non il suo risultato
 
-  const shotFloorBounceSpeed = ballBounceSpeed * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
+  const shotFloorBounceSpeed = BALL_BOUNCE_SPEED * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
 
   const shootRaycaster = new THREE.Raycaster()
   const crosshairNDC = new THREE.Vector2()
@@ -172,16 +177,15 @@ export function initShootingSystem(ctx) {
   const shotVelocity = new THREE.Vector3()
   const scratchPreviousShotPos = new THREE.Vector3()
   function stepShotFlight(dt) {
-    // ctx.basketball è un getter (assegnato in modo asincrono al caricamento
-    // del GLTF) — la reference non cambia mai a metà di questa singola
-    // chiamata, quindi si legge una volta sola invece di rivalutarla ad ogni
-    // accesso
-    const ball = ctx.basketball
+    // basketball è assegnato in modo asincrono al caricamento del GLTF, ma
+    // la reference non cambia mai a metà di questa singola chiamata —
+    // ctx.getBasketball() richiamata una volta sola invece che ad ogni accesso
+    const ball = ctx.getBasketball()
     const ballRadius = getBallRadius()
     // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto
     // esatto di attraversamento del piano del ferro, le serve X/Z di prima
     scratchPreviousShotPos.copy(ball.position)
-    shotVelocity.y -= ballGravity * dt
+    shotVelocity.y -= BALL_GRAVITY * dt
     ball.position.addScaledVector(shotVelocity, dt)
     applyHoopAssist(
       ball.position, shotVelocity, dt,
@@ -242,12 +246,12 @@ export function initShootingSystem(ctx) {
       shootingState.stateTransitionTimer -= delta
       if (shootingState.stateTransitionTimer <= 0) {
         manipulator.setState(RobotState.NO_BALL)
-        ctx.basketball.setState(BallState.FREE)
+        ctx.getBasketball().setState(BallState.FREE)
         // stessa sicurezza di releaseBallHandling(): il clamp esteso di
         // HANDLING è valido solo lì — appena si esce la camera passa alla
         // formula normale, che con un pitch estremo manda la camera sotto
         // il pavimento (mai riclampata altrimenti fino al prossimo mousemove)
-        clampOrbitPitchToNormalRange(cameraState, orbitPitchMin, orbitPitchMax)
+        clampOrbitPitchToNormalRange(cameraState)
       }
     }
 
@@ -324,7 +328,7 @@ export function initShootingSystem(ctx) {
     if (!shootingState.released) {
       // stesso motivo di updateHandling: manipulator.ballRestPoint segue il
       // vero punto di convergenza della V, corretto per qualunque tilt
-      snapBallToRestPoint(manipulator, ctx.basketball)
+      snapBallToRestPoint(manipulator, ctx.getBasketball())
     }
   }
 
@@ -364,13 +368,21 @@ export function initShootingSystem(ctx) {
   const trajColoredPoints = []
   // diagnostica per il pannello CAMERA (tasto P)
   const trajDebug = { count: 0, stopReason: '—' }
+  // scratch riusati invece di allocare ad ogni chiamata: updateTrajectoryPreview
+  // gira ogni frame mentre si mira (fino a TRAJECTORY_MAX_STEPS passi ciascuna).
+  // previewScratchPreviousPos sostituisce un .clone() ad ogni chiamata (stesso
+  // scratch-pattern di scratchPreviousShotPos in stepShotFlight); la Map dei
+  // cooldown è svuotata (.clear()) invece di ricreata — SEPARATA da
+  // shotCollisionCooldowns (volo reale), mai condivisa tra le due
+  const previewScratchPreviousPos = new THREE.Vector3()
+  const previewCollisionCooldowns = new Map()
 
   function updateTrajectoryPreview() {
     // NOTA: usa la posa di mira ATTUALE (quella che updateHandling ha
     // appena applicato), non quella di rilascio effettivo — un tentativo
     // di simulare la posa di rilascio esatta è stato provato e scartato:
     // con mira bassa/di lato produceva un'origine innaturale
-    trajPos.copy(ctx.basketball.position)
+    trajPos.copy(ctx.getBasketball().position)
     getShotDirection(trajVel).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
 
     trajBlackPoints.length = 0
@@ -379,7 +391,7 @@ export function initShootingSystem(ctx) {
     let collided = false
     // vettore COMPLETO (non solo Y): isHoopCrossing interpola il punto
     // esatto di attraversamento del piano del ferro
-    const previousTrajPos = trajPos.clone()
+    const previousTrajPos = previewScratchPreviousPos.copy(trajPos)
     trajBlackPoints.push(trajPos.clone())
 
     const hoopAssistStrength = shootingStatToAssistStrength(manipulator.stats.shooting)
@@ -387,9 +399,9 @@ export function initShootingSystem(ctx) {
     // mappa dei cooldown SEPARATA dal volo reale: la preview simula un tiro
     // ipotetico ogni frame mentre si mira, non deve "consumare" il
     // cooldown degli oggetti reali prima che il tiro vero parta davvero
-    const previewCollisionCooldowns = new Map()
+    previewCollisionCooldowns.clear()
     for (let i = 0; i < TRAJECTORY_MAX_STEPS; i++) {
-      trajVel.y -= ballGravity * TRAJECTORY_DT
+      trajVel.y -= BALL_GRAVITY * TRAJECTORY_DT
       trajPos.addScaledVector(trajVel, TRAJECTORY_DT)
       applyHoopAssist(trajPos, trajVel, TRAJECTORY_DT, hoopAssistStrength, collisionWorld.hoops, collisionWorld.BACKBOARD_TOP_Y, ctx.rimRingRadius)
 

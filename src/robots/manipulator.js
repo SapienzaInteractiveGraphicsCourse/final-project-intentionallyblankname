@@ -93,7 +93,7 @@ export function drawBrushedMetal(ctx, size, count = 400) {
 
 // pattern "grana gomma/plastica": puntini sparsi di dimensione e luminosità
 // variabili — per wheelMat (gomma ruote) e accentMat (plastica paletta)
-export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
+function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
   for (let i = 0; i < count; i++) {
     const x = Math.random() * size, y = Math.random() * size
     const r = 1 + Math.random() * maxRadius

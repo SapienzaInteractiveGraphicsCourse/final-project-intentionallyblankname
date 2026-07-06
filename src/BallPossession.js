@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { angleToForward, rotateRight } from './mathUtils.js'
+import { BALL_GRAVITY, BALL_BOUNCE_SPEED, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from './constants.js'
 
 // Terzo pezzo del refactor modulare (dopo mathUtils/debugPanelHelpers,
 // prima di MainMenu): come il robot possiede/palleggia/afferra la palla —
@@ -14,6 +15,19 @@ import { angleToForward, rotateRight } from './mathUtils.js'
 // System (updateShootAnimation) — condiviso invece di duplicato, un solo
 // punto di verità su "dove sta la paletta in questo istante".
 export const paddleWorldPos = new THREE.Vector3()
+// bounding box VERA del robot (non la distanza dal solo centro/root — il
+// corpo è largo e basso, non uno sferoide, un raggio da un punto solo non
+// rappresenta bene quando la palla è davvero "a portata") — ricalcolata
+// dalla geometria reale ogni volta, si adatta a qualunque posa/rotazione.
+// Esportata come funzione (non solo interna a checkForPickup): il readout
+// debug "pickup-dist" in main.js deve mostrare ESATTAMENTE lo stesso test,
+// non una sua approssimazione a parte
+const scratchRobotBox = new THREE.Box3()
+export function isRobotTouchingBall(manipulator, basketball, ballRadius, margin) {
+  scratchRobotBox.setFromObject(manipulator.root)
+  scratchRobotBox.expandByScalar(ballRadius + margin)
+  return scratchRobotBox.containsPoint(basketball.position)
+}
 // SOLO per stepDribble (palleggio automatico), dove il tilt della paletta
 // resta sempre costante (yaw+giù fisso basta) — updateHandling/tiro NON
 // usano questi offset, lì il tilt cambia e la palla segue direttamente il
@@ -47,9 +61,12 @@ export function snapBallToRestPoint(manipulator, basketball) {
 // camera passa alla formula normale (orbita+lookAt), che con un pitch
 // così estremo manda la camera sotto il pavimento (mai riclampata
 // altrimenti fino al prossimo movimento del mouse). Condivisa da
-// releaseBallHandling() qui e da updateShootAnimation in ShootingSystem.js
-export function clampOrbitPitchToNormalRange(cameraState, orbitPitchMin, orbitPitchMax) {
-  cameraState.orbitPitch = THREE.MathUtils.clamp(cameraState.orbitPitch, orbitPitchMin, orbitPitchMax)
+// releaseBallHandling() qui e da updateShootAnimation in ShootingSystem.js.
+// ORBIT_PITCH_MIN/MAX importate direttamente (vere costanti, mai
+// riassegnate) — il range HANDLING-esteso resta invece locale a main.js,
+// è specifico della camera in Play mode
+export function clampOrbitPitchToNormalRange(cameraState) {
+  cameraState.orbitPitch = THREE.MathUtils.clamp(cameraState.orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
 }
 
 // Simulazione del palleggio, macchina a stati push/drop/rise — parametrizzata
@@ -60,14 +77,14 @@ export function clampOrbitPitchToNormalRange(cameraState, orbitPitchMin, orbitPi
 // state è un oggetto { phase, phaseT, armEase, ballVelocityY,
 // previousPushPaddleY, riseBallisticY, lockOffset (Vector3) } — mutato in
 // place, chi chiama decide come/se leggerne i campi dopo. physics è
-// { dribbleTuning, ballRadius, ballGravity, ballBounceSpeed } — un oggetto
-// invece di 4 parametri sciolti, e ballRadius passato ad ogni chiamata (non
-// fissato una volta) perché resta regolabile da debug a runtime. onBounce
-// (opzionale) scatta solo al tocco del pavimento in 'drop': il gioco vero
-// ci suona sfx.playBounce, la preview del menu resta silenziosa (nessun
-// suono atteso sfogliando i menu)
+// { dribbleTuning, ballRadius } — solo ballRadius, non anche gravità/bounce
+// speed (vere costanti, importate direttamente da constants.js): passato ad
+// ogni chiamata (non fissato una volta) perché resta regolabile da debug a
+// runtime. onBounce (opzionale) scatta solo al tocco del pavimento in
+// 'drop': il gioco vero ci suona sfx.playBounce, la preview del menu resta
+// silenziosa (nessun suono atteso sfogliando i menu)
 export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBounce) {
-  const { dribbleTuning, ballRadius, ballGravity, ballBounceSpeed } = physics
+  const { dribbleTuning, ballRadius } = physics
   state.phaseT += dt
   const [elbowAmplitude, link1Amplitude] = dribbleAmplitudesRad(dribbleTuning)
   // armEase aggiornata solo in 'push'/'rise' — in 'drop' resta quella di
@@ -76,7 +93,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     const t = Math.min(state.phaseT / dribbleTuning.pushDuration, 1)
     state.armEase = t * t // ease-IN: velocità massima (non zero) proprio al rilascio, sempre da 0 (pose pulita, niente scatto residuo)
   } else if (state.phase === 'rise') {
-    const riseDuration = ballBounceSpeed / ballGravity // tempo per decelerare a v=0 sotto gravità
+    const riseDuration = BALL_BOUNCE_SPEED / BALL_GRAVITY // tempo per decelerare a v=0 sotto gravità
     const t = Math.min(state.phaseT / riseDuration, 1)
     state.armEase = 1 - t * t * (3 - 2 * t) // da 1 a 0: il braccio torna su mentre la palla risale
   }
@@ -138,11 +155,11 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     // sempre zero, ad ogni singolo ciclo (deterministico, non casuale)
     if (state.armEase >= 1 - 1e-6) { state.phase = 'drop'; state.phaseT = 0 }
   } else if (state.phase === 'drop') {
-    state.ballVelocityY -= ballGravity * dt
+    state.ballVelocityY -= BALL_GRAVITY * dt
     let ballY = ballPositionTarget.y + state.ballVelocityY * dt
     if (ballY <= ballRadius) {
       ballY = ballRadius
-      state.ballVelocityY = ballBounceSpeed
+      state.ballVelocityY = BALL_BOUNCE_SPEED
       state.riseBallisticY = ballY // stato fisico vero di 'rise', riparte dal punto di rimbalzo
       state.phase = 'rise'
       state.phaseT = 0
@@ -150,7 +167,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     }
     ballPositionTarget.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
   } else { // 'rise'
-    state.ballVelocityY -= ballGravity * dt
+    state.ballVelocityY -= BALL_GRAVITY * dt
     // riseBallisticY integra la fisica pura, MAI la Y già corretta (che
     // altrimenti si accumulerebbe frame dopo frame) — la correzione è un
     // piccolo offset costante applicato solo qui, in fase di render
@@ -176,8 +193,7 @@ export function initBallPossession(ctx) {
   const {
     manipulator, dribbleState, handlingState, pickupState, shootingState,
     dribbleTuning, handlingTuning, cameraState,
-    getBallRadius, ballGravity, ballBounceSpeed,
-    orbitPitchMin, orbitPitchMax,
+    getBallRadius,
     computeAimPitchOffset, sfx, dribbleBounceSoundVolume,
     pickupDuration, pickupMargin, pickupCoarseRadius,
   } = ctx
@@ -195,7 +211,7 @@ export function initBallPossession(ctx) {
 
   function releaseBallHandling() {
     manipulator.setState(RobotState.DRIBBLE)
-    clampOrbitPitchToNormalRange(cameraState, orbitPitchMin, orbitPitchMax)
+    clampOrbitPitchToNormalRange(cameraState)
     resetDribbleState()
     handlingState.grip = 0
     manipulator.controls.setGrip(0)
@@ -208,11 +224,11 @@ export function initBallPossession(ctx) {
   // invece di essere ricostruiti (nuovo oggetto + nuova arrow function) ad
   // ogni singola chiamata: solo ballRadius può cambiare (slider debug), e
   // viene aggiornato in place appena prima di ogni step
-  const dribblePhysics = { dribbleTuning, ballRadius: getBallRadius(), ballGravity, ballBounceSpeed }
+  const dribblePhysics = { dribbleTuning, ballRadius: getBallRadius() }
   const onDribbleBounce = () => sfx.playBounce(dribbleBounceSoundVolume)
   function updateDribble(dt) {
     dribblePhysics.ballRadius = getBallRadius()
-    stepDribble(dribbleState, manipulator, ctx.basketball.position, dt, dribblePhysics, onDribbleBounce)
+    stepDribble(dribbleState, manipulator, ctx.getBasketball().position, dt, dribblePhysics, onDribbleBounce)
   }
 
   // RobotState.HANDLING (tasto destro tenuto premuto): posa di presa fissa,
@@ -248,31 +264,21 @@ export function initBallPossession(ctx) {
     // già il punto geometricamente corretto — dove le normali delle due metà
     // della V si incontrerebbero se estruse, non il centro "piatto" usato dal
     // palleggio (quello assume un tilt sempre costante, qui varia)
-    snapBallToRestPoint(manipulator, ctx.basketball)
+    snapBallToRestPoint(manipulator, ctx.getBasketball())
   }
 
-  // bounding box VERA del robot (non la distanza dal solo centro/root — il
-  // corpo è largo e basso, non uno sferoide, un raggio da un punto solo non
-  // rappresenta bene quando la palla è davvero "a portata") — ricalcolata
-  // dalla geometria reale ogni volta, si adatta a qualunque posa/rotazione
-  const scratchRobotBox = new THREE.Box3()
   // avvia il pickup (non durante un altro pickup già in corso, né se la
   // palla non è libera). Chiamata da updateShotFlight (Shooting System)
   // ogni frame mentre lo stato è NO_BALL. Scarto grossolano (solo distanza
   // al quadrato dal root, nessuna allocazione né traversal) prima del test
-  // preciso: setFromObject attraversa l'intera gerarchia del robot (ruote,
-  // telaio, bracci) e aggiorna le matrici mondo di ognuna, costoso per
-  // essere chiamato ogni frame mentre la palla è FREE. Il raggio è
-  // ampiamente più largo del vero ingombro del robot (~60-70 unità +
-  // margine): scarta solo i casi ovviamente lontani, non introduce falsi
-  // negativi vicino al bordo reale
+  // preciso (isRobotTouchingBall, che sì alloca/traversa) — scarta solo i
+  // casi ovviamente lontani, non introduce falsi negativi vicino al bordo reale
   function checkForPickup() {
-    if (pickupState.phase !== 'idle' || !ctx.basketball || ctx.basketball.state !== BallState.FREE) return
+    const ball = ctx.getBasketball()
+    if (pickupState.phase !== 'idle' || !ball || ball.state !== BallState.FREE) return
     if (manipulator.state !== RobotState.NO_BALL) return
-    if (manipulator.root.position.distanceToSquared(ctx.basketball.position) > pickupCoarseRadius * pickupCoarseRadius) return
-    scratchRobotBox.setFromObject(manipulator.root)
-    scratchRobotBox.expandByScalar(getBallRadius() + pickupMargin)
-    if (!scratchRobotBox.containsPoint(ctx.basketball.position)) return
+    if (manipulator.root.position.distanceToSquared(ball.position) > pickupCoarseRadius * pickupCoarseRadius) return
+    if (!isRobotTouchingBall(manipulator, ball, getBallRadius(), pickupMargin)) return
     pickupState.phase = 'active'
     pickupState.phaseT = 0
   }
@@ -299,11 +305,11 @@ export function initBallPossession(ctx) {
     // usato dal palleggio automatico, sta sulla superficie della paletta e
     // causava compenetrazione visiva — ballRestPoint è il punto corretto già
     // usato da HANDLING/tiro, spostato fuori lungo la convergenza della V
-    snapBallToRestPoint(manipulator, ctx.basketball)
+    snapBallToRestPoint(manipulator, ctx.getBasketball())
 
     if (t >= 1) {
       pickupState.phase = 'idle'
-      ctx.basketball.setState(BallState.HANDLED)
+      ctx.getBasketball().setState(BallState.HANDLED)
       manipulator.setState(RobotState.DRIBBLE)
       resetDribbleState()
       // senza questo resta true dal tiro che ha liberato la palla: animate()

@@ -16,9 +16,10 @@ import { SoundEffects } from './SoundEffects.js'
 import { CollisionWorld, RIM_RING_RADIUS } from './CollisionWorld.js'
 import { initMainMenu } from './MainMenu.js'
 import { angleToForward, rotateRight, lerpAngle } from './mathUtils.js'
-import { createSliderControl, createToggleSection, addComponentSection } from './debugPanelHelpers.js'
-import { initBallPossession, stepDribble, dribbleAmplitudesRad, paddleWorldPos } from './BallPossession.js'
+import { initBallPossession, stepDribble, dribbleAmplitudesRad } from './BallPossession.js'
 import { initShootingSystem } from './ShootingSystem.js'
+import { initDebugPanel } from './debugPanel.js'
+import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from './constants.js'
 
 // --- Renderer ---
 // antialias:true qui non ha effetto: il rendering passa da EffectComposer
@@ -410,9 +411,10 @@ let BALL_RADIUS = 15 // unità mondo (~cm-scale) — sfera sorgente ha raggio 1
 // moltiplica il texel, non è clampato a 1) senza tingere, a differenza di
 // un colore/tint diverso da bianco
 const BALL_COLOR_BRIGHTNESS = 1.15
-// const (non più regolabili da debug): valori fissati dopo il tuning
-const BALL_GRAVITY = 820       // unità/s² (scena ≈ cm-scale), non più il valore g reale
-const BALL_BOUNCE_SPEED = 415  // velocità impressa ad ogni rimbalzo (palleggio automatico)
+// BALL_GRAVITY/BALL_BOUNCE_SPEED ora in src/constants.js: vere costanti, mai
+// riassegnate — non più usate qui in main.js (importate direttamente da
+// BallPossession.js/ShootingSystem.js/debugPanel.js invece di essere
+// ripassate in ogni context)
 // CollisionWorld (src/CollisionWorld.js): possiede backboard/ferro/muri/
 // pali/panchine (coordinate estratte dagli accessor del GLTF, non stimate
 // a occhio — vedi i commenti nel file) e il metodo resolve() che li
@@ -609,217 +611,9 @@ const keys = {}
 document.addEventListener('keydown', e => keys[e.code] = true)
 document.addEventListener('keyup',   e => keys[e.code] = false)
 
-// --- Debug Menu (tasto P) ---
-const debugPanel = document.getElementById('debug-panel')
-
-// createSliderControl/createToggleSection/addComponentSection ora in
-// src/debugPanelHelpers.js (helper puri di costruzione DOM)
-
-const cfg = manipulator.getConfig()
-
-// range condiviso da tutti gli slider "Scale" per componente, invece della
-// stessa tripla min/max/step ripetuta 7 volte
-const SCALE_SLIDER_RANGE = { min: 0.2, max: 3, step: 0.05 }
-// estremi degli slider Paddle Angle/Tilt — baseline attuale tarata proprio
-// su questi massimi (vedi state.paddleAngle/paddleTilt in manipulator.js)
-const PADDLE_ANGLE_MAX = 2.4
-const PADDLE_TILT_MAX = 1.2
-
-// --- Manipulator Shape: dimensioni statiche (scale/length/thickness) ---
-const manipulatorShape = createToggleSection(debugPanel, 'Manipulator Shape')
-
-createSliderControl(manipulatorShape, {
-  name: 'Manipulator Scale (overall)', min: 1, max: 50, step: 0.5,
-  value: cfg.manipulatorScale, onChange: manipulator.controls.manipulatorScale,
-})
-
-const manipulatorConfig = createToggleSection(manipulatorShape, 'Manipulator Config')
-
-addComponentSection(manipulatorConfig, 'Wheels', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.wheelsScale, onChange: manipulator.controls.wheelsScale },
-])
-addComponentSection(manipulatorConfig, 'Disc', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.discScale, onChange: manipulator.controls.discScale },
-  { name: 'Radius', min: 0.5, max: 3, step: 0.05, value: cfg.discRadius, onChange: manipulator.controls.discRadius },
-])
-addComponentSection(manipulatorConfig, 'Link 1', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link1Scale, onChange: manipulator.controls.link1Scale },
-  { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link1Length, onChange: manipulator.controls.link1Length },
-  { name: 'Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link1Thickness, onChange: manipulator.controls.link1Thickness },
-])
-addComponentSection(manipulatorConfig, 'Link 2', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link2Scale, onChange: manipulator.controls.link2Scale },
-  { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link2Length, onChange: manipulator.controls.link2Length },
-  { name: 'Base Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link2Thickness, onChange: manipulator.controls.link2Thickness },
-  { name: 'Tip Thickness', min: 0.02, max: 1, step: 0.01, value: cfg.link2TipThickness, onChange: manipulator.controls.link2TipThickness },
-])
-addComponentSection(manipulatorConfig, 'Base Joint (sfera)', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.baseJointScale, onChange: manipulator.controls.baseJointScale },
-])
-addComponentSection(manipulatorConfig, 'Elbow Joint (sfera)', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.elbowJointScale, onChange: manipulator.controls.elbowJointScale },
-])
-addComponentSection(manipulatorConfig, 'End Effector (sfera)', [
-  { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.endEffectorScale, onChange: manipulator.controls.endEffectorScale },
-])
-addComponentSection(manipulatorConfig, 'Paddle (V)', [
-  { name: 'Angle', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: cfg.paddleAngle, onChange: manipulator.controls.paddleAngle },
-  { name: 'Tilt (down)', min: -PADDLE_TILT_MAX, max: PADDLE_TILT_MAX, step: 0.02, value: cfg.paddleTilt, onChange: manipulator.controls.paddleTilt },
-])
-
-// --- Manipulator Animation: parametri delle animazioni (non la forma) ---
-const manipulatorAnimation = createToggleSection(debugPanel, 'Manipulator Animation')
-
-addComponentSection(manipulatorAnimation, 'Dribble', [
-  { name: 'Push Duration (s)', min: 0.05, max: 1, step: 0.01, value: dribbleTuning.pushDuration, onChange: v => { dribbleTuning.pushDuration = v } },
-  { name: 'Elbow Amplitude (deg)', min: 0, max: 45, step: 1, value: dribbleTuning.elbowAmplitudeDeg, onChange: v => { dribbleTuning.elbowAmplitudeDeg = v } },
-  { name: 'Link 1 Amplitude (deg)', min: 0, max: 25, step: 0.5, value: dribbleTuning.link1AmplitudeDeg, onChange: v => { dribbleTuning.link1AmplitudeDeg = v } },
-  { name: 'Lock Absorb Time (s)', min: 0.01, max: 0.3, step: 0.01, value: dribbleTuning.lockAbsorbTime, onChange: v => { dribbleTuning.lockAbsorbTime = v } },
-  { name: 'Rise Y Correction', min: 0, max: 25, step: 1, value: dribbleTuning.riseYCorrection, onChange: v => { dribbleTuning.riseYCorrection = v } },
-])
-addComponentSection(manipulatorAnimation, 'Shoot', [
-  { name: 'Windup Duration (s)', min: 0.05, max: 1, step: 0.01, value: shootTuning.windupDuration, onChange: v => { shootTuning.windupDuration = v } },
-  { name: 'Release Duration (s)', min: 0.05, max: 1, step: 0.01, value: shootTuning.releaseDuration, onChange: v => { shootTuning.releaseDuration = v } },
-  { name: 'Recover Duration (s)', min: 0.05, max: 1, step: 0.01, value: shootTuning.recoverDuration, onChange: v => { shootTuning.recoverDuration = v } },
-  { name: 'Elbow Windup (deg)', min: -90, max: 90, step: 1, value: shootTuning.elbowWindupDeg, onChange: v => { shootTuning.elbowWindupDeg = v } },
-  { name: 'Link 1 Windup (deg)', min: -90, max: 90, step: 1, value: shootTuning.link1WindupDeg, onChange: v => { shootTuning.link1WindupDeg = v } },
-  { name: 'Elbow Release (deg)', min: -90, max: 90, step: 1, value: shootTuning.elbowReleaseDeg, onChange: v => { shootTuning.elbowReleaseDeg = v } },
-  { name: 'Link 1 Release (deg)', min: -90, max: 90, step: 1, value: shootTuning.link1ReleaseDeg, onChange: v => { shootTuning.link1ReleaseDeg = v } },
-  { name: 'Elbow Release Lead', min: 0, max: 0.9, step: 0.05, value: shootTuning.releaseLead, onChange: v => { shootTuning.releaseLead = v } },
-  { name: 'Release Point', min: 0.1, max: 1, step: 0.05, value: shootTuning.releasePoint, onChange: v => { shootTuning.releasePoint = v } },
-  { name: 'Elbow Aim Coupling', min: 0, max: 2, step: 0.05, value: shootTuning.elbowAimCoupling, onChange: v => { shootTuning.elbowAimCoupling = v } },
-  { name: 'Paddle Tilt Windup Peak', min: -3, max: 3, step: 0.05, value: shootTuning.tiltWindupPeak, onChange: v => { shootTuning.tiltWindupPeak = v } },
-  { name: 'Paddle Tilt Target (release)', min: -3, max: 3, step: 0.05, value: shootTuning.tiltTarget, onChange: v => { shootTuning.tiltTarget = v } },
-  { name: 'Shot Speed', min: 100, max: 2500, step: 10, value: shootTuning.shotSpeed, onChange: v => { shootTuning.shotSpeed = v } },
-  { name: 'State Transition Delay (s)', min: 0, max: 1, step: 0.05, value: shootTuning.stateTransitionDelay, onChange: v => { shootTuning.stateTransitionDelay = v } },
-])
-addComponentSection(manipulatorAnimation, 'Handling (tasto destro)', [
-  { name: 'Arm Ease', min: -1, max: 1, step: 0.02, value: handlingTuning.ease, onChange: v => { handlingTuning.ease = v } },
-  { name: 'Grip Angle (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: handlingTuning.gripOffset, onChange: v => { handlingTuning.gripOffset = v } },
-  { name: 'Transition Speed', min: 1, max: 30, step: 1, value: handlingTuning.transitionSpeed, onChange: v => { handlingTuning.transitionSpeed = v } },
-  { name: 'Camera Height Boost', min: 0, max: 300, step: 5, value: HANDLING_HEIGHT_BOOST, onChange: v => { HANDLING_HEIGHT_BOOST = v } },
-  { name: 'Camera Side Offset', min: -150, max: 150, step: 5, value: HANDLING_CAMERA_SIDE_OFFSET, onChange: v => { HANDLING_CAMERA_SIDE_OFFSET = v } },
-  {
-    name: 'Ball Rest Extra Offset', min: -5, max: 10, step: 0.05, value: BALL_REST_EXTRA_OFFSET,
-    onChange: v => { BALL_REST_EXTRA_OFFSET = v; manipulator.controls.setBallRestOffset(v) },
-  },
-])
-addComponentSection(manipulatorAnimation, 'Play Aim', [
-  { name: 'Arm Yaw Offset (deg)', min: -180, max: 180, step: 1, value: ARM_YAW_OFFSET_DEG, onChange: v => { ARM_YAW_OFFSET_DEG = v } },
-  {
-    name: 'Crosshair Height (px)', min: 0, max: 300, step: 5, value: CROSSHAIR_HEIGHT,
-    onChange: v => { CROSSHAIR_HEIGHT = v; updateCrosshairPosition() },
-  },
-])
-
-// --- Basketball ---
-const basketballConfig = createToggleSection(debugPanel, 'Basketball')
-createSliderControl(basketballConfig, {
-  name: 'Scale', min: 5, max: 40, step: 1, value: BALL_RADIUS,
-  onChange: v => {
-    BALL_RADIUS = v
-    if (basketball) basketball.scale.setScalar(v)
-  },
-})
-addComponentSection(basketballConfig, 'Ball Offset (da centro paletta)', [
-  { name: 'Forward', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetForward, onChange: v => { dribbleTuning.ballOffsetForward = v } },
-  { name: 'Side', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetSide, onChange: v => { dribbleTuning.ballOffsetSide = v } },
-  { name: 'Down', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetDown, onChange: v => { dribbleTuning.ballOffsetDown = v } },
-])
-
-// "Copy config": serializza TUTTI i parametri regolabili da debug pronti
-// da incollare nel codice (manipolatore + dribble + pallone, non solo la
-// forma del robot come prima — stesso schema usato finora per hardcodare
-// scala/spawn camera)
-const copyConfigBtn = document.createElement('button')
-copyConfigBtn.id = 'copy-config-btn'
-copyConfigBtn.textContent = 'Copy config'
-const copyConfigFeedback = document.createElement('div')
-copyConfigFeedback.id = 'copy-config-feedback'
-debugPanel.append(copyConfigBtn, copyConfigFeedback)
-const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms prima che il messaggio "Copiato" sparisca
-
-copyConfigBtn.addEventListener('click', async () => {
-  const c = {
-    ...manipulator.getConfig(),
-    ballRadius: BALL_RADIUS, ballGravity: BALL_GRAVITY, ballBounceSpeed: BALL_BOUNCE_SPEED,
-    armYawOffsetDeg: ARM_YAW_OFFSET_DEG, crosshairHeight: CROSSHAIR_HEIGHT,
-    dribblePushDuration: dribbleTuning.pushDuration, dribbleElbowAmplitudeDeg: dribbleTuning.elbowAmplitudeDeg,
-    dribbleLink1AmplitudeDeg: dribbleTuning.link1AmplitudeDeg, dribbleLockAbsorbTime: dribbleTuning.lockAbsorbTime,
-    dribbleRiseYCorrection: dribbleTuning.riseYCorrection,
-    handlingEase: handlingTuning.ease, handlingGripOffset: handlingTuning.gripOffset, handlingTransitionSpeed: handlingTuning.transitionSpeed,
-    handlingHeightBoost: HANDLING_HEIGHT_BOOST, handlingCameraSideOffset: HANDLING_CAMERA_SIDE_OFFSET,
-    ballOffsetForward: dribbleTuning.ballOffsetForward, ballOffsetSide: dribbleTuning.ballOffsetSide, ballOffsetDown: dribbleTuning.ballOffsetDown,
-    shootWindupDuration: shootTuning.windupDuration, shootReleaseDuration: shootTuning.releaseDuration,
-    shootElbowWindupDeg: shootTuning.elbowWindupDeg, shootLink1WindupDeg: shootTuning.link1WindupDeg,
-    shootElbowReleaseDeg: shootTuning.elbowReleaseDeg, shootLink1ReleaseDeg: shootTuning.link1ReleaseDeg,
-    shootReleaseLead: shootTuning.releaseLead, shootReleasePoint: shootTuning.releasePoint, shotSpeed: shootTuning.shotSpeed,
-    shootRecoverDuration: shootTuning.recoverDuration, shootElbowAimCoupling: shootTuning.elbowAimCoupling,
-    shootTiltWindupPeak: shootTuning.tiltWindupPeak, shootTiltTarget: shootTuning.tiltTarget,
-    ballRestExtraOffset: BALL_REST_EXTRA_OFFSET,
-  }
-  const text = Object.entries(c).map(([k, v]) => `${k}: ${v}`).join('\n')
-  try {
-    await navigator.clipboard.writeText(text)
-    copyConfigFeedback.textContent = 'Copiato negli appunti ✓'
-  } catch {
-    copyConfigFeedback.textContent = text
-  }
-  setTimeout(() => { copyConfigFeedback.textContent = '' }, COPY_CONFIG_FEEDBACK_DURATION)
-})
-
-// --- Pannello Camera (posizione + angoli, sola lettura) ---
-const cameraPanel = document.getElementById('camera-panel')
-// [elemento, funzione che legge il valore corrente] invece di 6 variabili
-// + 6 assegnazioni .textContent speculari nel loop
-const camReadouts = [
-  ['cam-x', () => camera.position.x.toFixed(1)],
-  ['cam-y', () => camera.position.y.toFixed(1)],
-  ['cam-z', () => camera.position.z.toFixed(1)],
-  ['cam-pitch', () => THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1)],
-  ['cam-yaw', () => THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1)],
-  ['cam-roll', () => THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1)],
-  // stato grezzo della macchina a stati del palleggio, per verificare a
-  // occhio SE è davvero questo a scattare in anticipo (non solo i numeri
-  // derivati sotto)
-  ['dribble-phase', () => dribbleState.phase],
-  ['dribble-arm-ease', () => dribbleState.armEase.toFixed(3)],
-  ['ball-y', () => basketball ? basketball.position.y.toFixed(1) : '—'],
-  ['paddle-y', () => paddleWorldPos.y.toFixed(1)],
-  // "Gap (live)" è quasi sempre diverso da zero (palla e paletta seguono
-  // curve diverse per la maggior parte del ciclo, per design) — non è il
-  // numero utile. "Reconnect Gap" invece è lockOffset.y: congelato
-  // esattamente nell'istante del riaggancio, resta leggibile tra un ciclo
-  // e l'altro invece di sfarfallare — è QUESTO che deve tendere a 0
-  // tarando Bounce Speed/Gravity
-  ['ball-paddle-gap', () => basketball ? (basketball.position.y - paddleWorldPos.y).toFixed(1) : '—'],
-  ['reconnect-gap', () => dribbleState.lockOffset.y.toFixed(1)],
-  // diagnostica preview traiettoria: quanti punti ha scritto l'ultima volta
-  // e PERCHÉ si è fermata (pavimento / esaurito il budget di passi / mai
-  // aggiornata) — per capire a occhio, mentre si mira, cosa succede davvero
-  // invece di indovinare dal solo aspetto della linea
-  ['traj-count', () => trajDebug.count],
-  ['traj-stop', () => trajDebug.stopReason],
-  // true/false reale del test usato da checkForPickup (bounding box del
-  // robot, non solo la distanza dal centro) e stato FSM, per verificare a
-  // occhio se il pickup dovrebbe scattare invece di indovinare
-  ['pickup-dist', () => {
-    if (!basketball) return '—'
-    scratchRobotBox.setFromObject(manipulator.root)
-    scratchRobotBox.expandByScalar(BALL_RADIUS + PICKUP_MARGIN)
-    return scratchRobotBox.containsPoint(basketball.position) ? 'DENTRO (dovrebbe scattare)' : 'fuori'
-  }],
-  ['pickup-state', () => `ball=${basketball ? basketball.state : '—'} robot=${manipulator.state} phase=${pickupState.phase}`],
-].map(([id, get]) => [document.getElementById(id), get])
-
-document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyP' || e.repeat) return
-  const opening = debugPanel.classList.contains('hidden')
-  debugPanel.classList.toggle('hidden', !opening)
-  cameraPanel.classList.toggle('hidden', !opening)
-  // serve il cursore per usare lo slider, quindi si sblocca il pointer lock
-  if (opening && controls.isLocked) controls.unlock()
-})
+// Pannello debug (tasto P) — costruzione slider/readout ora in
+// src/debugPanel.js (initDebugPanel), chiamata più sotto dopo
+// initShootingSystem (serve PICKUP_MARGIN, dichiarata più avanti nel file)
 
 const camDir = new THREE.Vector3()
 const camRight = new THREE.Vector3()
@@ -914,8 +708,7 @@ cameraState.orbitYaw = 0
 // altezza/distanza), poi libero via mouse entro un range che non ribalta
 const ORBIT_PITCH_REST = Math.atan2(CHASE_HEIGHT, CHASE_DISTANCE)
 cameraState.orbitPitch = ORBIT_PITCH_REST
-const ORBIT_PITCH_MIN = 0.05
-const ORBIT_PITCH_MAX = 0.9 // avvicinato a ORBIT_PITCH_MAX_HANDLING (meno differenza tra i due stati, transizione meno marcata)
+// ORBIT_PITCH_MIN/MAX ora in src/constants.js (importate sopra)
 // cameraState.orbitPitch CRESCENTE porta la camera più in alto e vicina, sopra la testa
 // del robot → guarda più IN GIÙ. Quindi "guarda su" è l'opposto: cameraState.orbitPitch
 // che SCENDE verso lo zero (camera bassa/lontana, quasi alla pari del
@@ -1180,8 +973,8 @@ const dribbleState = {
   ballVelocityY: 0, riseBallisticY: 0, previousPushPaddleY: null,
   lockOffset: new THREE.Vector3(),
 }
-// paddleWorldPos ora in src/BallPossession.js (esportata, importata sotto —
-// condivisa anche con Shooting System e col pannello debug qui in main.js)
+// paddleWorldPos ora in src/BallPossession.js (esportata — condivisa anche
+// con ShootingSystem.js e col pannello debug in src/debugPanel.js)
 
 // timestep fisso per la simulazione del palleggio, disaccoppiato dal
 // framerate di rendering (accumulator pattern): il render loop gira a
@@ -1231,33 +1024,59 @@ const DRIBBLE_BOUNCE_SOUND_VOLUME = 0.35
 // checkForPickup/updatePickup ora in src/BallPossession.js
 const PICKUP_COARSE_RADIUS = 300
 
+// gameContext: un unico oggetto con tutto ciò che è genuinamente condiviso
+// da 2 o più dei moduli estratti (BallPossession/ShootingSystem/
+// debugPanel/MainMenu, sotto) — riferimenti stabili (manipulator/camera/
+// scene/sfx/controls) e oggetti-stato mutabili (cameraState/dribbleState/
+// handlingState/pickupState/shootingState/dribbleTuning/handlingTuning/
+// shootTuning). Costruito una volta sola, poi ogni init riceve
+// `{ ...gameContext, campiSuoi... }` invece di ricopiare a mano gli stessi
+// nomi in 4 letterali paralleli — un futuro campo condiviso si aggiunge qui
+// una volta, non in 4 punti che possono disallinearsi. collisionWorld NON
+// è qui: lo usa solo ShootingSystem (1 consumer su 4), passato diretto lì
+// invece di allargare "condiviso" a chi non lo tocca.
+//
+// getBasketball/getBallRadius sono FUNZIONI (non proprietà `get`/accessor):
+// lo spread `{ ...gameContext }` nelle chiamate sotto copia il VALORE di
+// ogni proprietà — per un accessor `get x() {...}` questo lo invoca subito e
+// ne congela il risultato CORRENTE in una proprietà statica sul nuovo
+// oggetto (verificato: `{...{get v(){return x}}}.v` non segue più
+// aggiornamenti di `x`), mai più un getter. Una proprietà il cui VALORE è
+// una funzione (`getBasketball: () => basketball`) non ha questo problema:
+// lo spread copia il riferimento alla funzione, non il suo risultato — la
+// stessa funzione richiamata più tardi legge sempre `basketball` fresco.
+// basketball resta un `let` di modulo riassegnato in modo asincrono al
+// caricamento del GLTF (è `null` all'avvio) — un valore catturato allo
+// spread resterebbe `null` per sempre, da qui la necessità della funzione
+// invece del valore diretto. BALL_RADIUS è un `let` condiviso con molto
+// altro codice qui in main.js per lo stesso motivo di fondo (letto fresco
+// ad ogni chiamata, non congelato allo spread)
+const gameContext = {
+  manipulator, getBasketball: () => basketball,
+  camera, scene, sfx, controls,
+  cameraState, dribbleState, handlingState, pickupState, shootingState,
+  dribbleTuning, handlingTuning, shootTuning,
+  getBallRadius: () => BALL_RADIUS,
+  computeAimPitchOffset,
+}
+
 // Ball Possession: palleggio automatico, HANDLING, pickup — estratti in
 // src/BallPossession.js (stesso principio di MainMenu.js: un unico oggetto
-// context, zero import circolari). basketball è un getter (carica async,
-// null all'avvio) come nel context di MainMenu. getBallRadius() è una
-// funzione (non una proprietà semplice): BALL_RADIUS resta un `let`
-// condiviso con molto altro codice qui in main.js, una funzione legge
-// sempre il valore corrente invece di una snapshot presa alla chiamata di
-// initBallPossession()
+// context, zero import circolari)
 const {
   resetDribbleState, releaseBallHandling,
   updateDribble, updateHandling, checkForPickup, updatePickup,
 } = initBallPossession({
-  manipulator, get basketball() { return basketball },
-  dribbleState, handlingState, pickupState, shootingState,
-  dribbleTuning, handlingTuning, cameraState,
-  getBallRadius: () => BALL_RADIUS, ballGravity: BALL_GRAVITY, ballBounceSpeed: BALL_BOUNCE_SPEED,
-  orbitPitchMin: ORBIT_PITCH_MIN, orbitPitchMax: ORBIT_PITCH_MAX,
-  computeAimPitchOffset, sfx, dribbleBounceSoundVolume: DRIBBLE_BOUNCE_SOUND_VOLUME,
+  ...gameContext,
+  dribbleBounceSoundVolume: DRIBBLE_BOUNCE_SOUND_VOLUME,
   pickupDuration: PICKUP_DURATION, pickupMargin: PICKUP_MARGIN, pickupCoarseRadius: PICKUP_COARSE_RADIUS,
 })
 
 // Shooting System: tiro, hoop assist, punteggio, preview di traiettoria —
-// estratti in src/ShootingSystem.js (stesso principio di context di
-// BallPossession/MainMenu). rimRingRadius passato direttamente (const
-// importata da CollisionWorld.js, mai riassegnata — nessun bisogno di
-// getter). getCrosshairHeight: CROSSHAIR_HEIGHT resta un `let` condiviso
-// con molto altro qui in main.js (debug panel, updateCrosshairPosition)
+// estratti in src/ShootingSystem.js. rimRingRadius passato direttamente
+// (const importata da CollisionWorld.js, mai riassegnata — nessun bisogno
+// di getter). getCrosshairHeight: CROSSHAIR_HEIGHT resta un `let`
+// condiviso con molto altro qui in main.js (debug panel, updateCrosshairPosition)
 const {
   getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc,
   addScore, checkHoopScore, clearAllCollisionCooldowns,
@@ -1265,12 +1084,30 @@ const {
   shotVelocity, trajDebug,
   resetScore: resetShootingScore,
 } = initShootingSystem({
-  manipulator, get basketball() { return basketball }, camera, collisionWorld, sfx, scene,
-  shootingState, shootTuning, cameraState, dribbleState, handlingState,
-  orbitPitchMin: ORBIT_PITCH_MIN, orbitPitchMax: ORBIT_PITCH_MAX,
-  computeAimPitchOffset, getCrosshairHeight: () => CROSSHAIR_HEIGHT,
-  getBallRadius: () => BALL_RADIUS, ballGravity: BALL_GRAVITY, ballBounceSpeed: BALL_BOUNCE_SPEED,
+  ...gameContext,
+  collisionWorld,
+  getCrosshairHeight: () => CROSSHAIR_HEIGHT,
   rimRingRadius: RIM_RING_RADIUS,
+})
+
+// Pannello debug (tasto P): costruzione slider/readout in src/debugPanel.js
+// — i 6 valori ancora `let` sciolti qui (usati anche altrove in main.js,
+// non consolidati in oggetto) passati come coppie getter/setter, stesso
+// principio di getBallRadius già in gameContext
+const { cameraPanel, updateReadouts } = initDebugPanel({
+  ...gameContext,
+  trajDebug, pickupMargin: PICKUP_MARGIN,
+  setBallRadius: v => { BALL_RADIUS = v; if (basketball) basketball.scale.setScalar(v) },
+  getHandlingHeightBoost: () => HANDLING_HEIGHT_BOOST,
+  setHandlingHeightBoost: v => { HANDLING_HEIGHT_BOOST = v },
+  getHandlingCameraSideOffset: () => HANDLING_CAMERA_SIDE_OFFSET,
+  setHandlingCameraSideOffset: v => { HANDLING_CAMERA_SIDE_OFFSET = v },
+  getBallRestExtraOffset: () => BALL_REST_EXTRA_OFFSET,
+  setBallRestExtraOffset: v => { BALL_REST_EXTRA_OFFSET = v; manipulator.controls.setBallRestOffset(v) },
+  getArmYawOffsetDeg: () => ARM_YAW_OFFSET_DEG,
+  setArmYawOffsetDeg: v => { ARM_YAW_OFFSET_DEG = v },
+  getCrosshairHeight: () => CROSSHAIR_HEIGHT,
+  setCrosshairHeight: v => { CROSSHAIR_HEIGHT = v; updateCrosshairPosition() },
 })
 
 // --- Main Menu ---
@@ -1315,13 +1152,13 @@ function updateMenuCameraOrbit(delta) {
 // resumeGame/showMenuScreen restano disponibili nel valore di ritorno per
 // altri punti d'ingresso futuri, non ancora servite fuori da MainMenu.js stesso
 const { openPauseMenu } = initMainMenu({
+  ...gameContext,
   menuOverlayEl: document.getElementById('menu-overlay'),
   hint, dashPanel, crosshair, modeIndicator,
-  menuState, controls,
+  menuState,
   applyTimeOfDayPreset, resetScore: resetShootingScore,
-  renderer, scene, camera, sun, ssaoPass, sfx,
-  manipulator, get basketball() { return basketball },
-  movementState, cameraState, dashState, shootingState, handlingState, pickupState,
+  renderer, sun, ssaoPass,
+  movementState, dashState,
   shotVelocity, ORBIT_PITCH_REST,
   resetDribbleState, clearAllCollisionCooldowns, hideTrajectoryPreview,
 })
@@ -1415,7 +1252,7 @@ function renderRobotCardPreview() {
     requestAnimationFrame(tickPreview)
     if (!menuState.robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
     const dt = Math.min(previewClock.getDelta(), MAX_DELTA)
-    stepDribble(previewDribbleState, previewRobot, previewBall.position, dt, { dribbleTuning, ballRadius: BALL_RADIUS, ballGravity: BALL_GRAVITY, ballBounceSpeed: BALL_BOUNCE_SPEED })
+    stepDribble(previewDribbleState, previewRobot, previewBall.position, dt, { dribbleTuning, ballRadius: BALL_RADIUS })
     previewRenderer.render(previewScene, previewCamera)
   }
   tickPreview()
@@ -1691,7 +1528,7 @@ function animate() {
   else hideTrajectoryPreview()
 
   if (!cameraPanel.classList.contains('hidden')) {
-    camReadouts.forEach(([el, get]) => { el.textContent = get() })
+    updateReadouts()
   }
 
   composer.render()

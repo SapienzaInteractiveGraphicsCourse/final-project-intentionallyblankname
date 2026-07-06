@@ -20,11 +20,13 @@ import { BallState } from './Basketball.js'
 // resta una CALLBACK nel context (usata anche fuori dal menu, al primo
 // avvio) — questo modulo non deve sapere come funziona dentro.
 //
-// basketball è un getter nel context (non un valore semplice): main.js lo
-// assegna in modo asincrono al caricamento del GLTF, quindi al momento in
-// cui initMainMenu() viene chiamato è ancora null — un valore catturato lì
-// per lì resterebbe null per sempre. Il getter legge il valore CORRENTE
-// ogni volta che viene chiamato.
+// ctx.getBasketball() è una funzione, non un valore semplice: main.js
+// assegna basketball in modo asincrono al caricamento del GLTF, quindi al
+// momento in cui initMainMenu() viene chiamato è ancora null — un valore
+// catturato lì per lì resterebbe null per sempre. La funzione legge il
+// valore CORRENTE ad ogni chiamata (non un accessor `get`: ctx nasce da uno
+// spread di gameContext in main.js, che valuterebbe subito un accessor e ne
+// congelerebbe il risultato — vedi il commento su gameContext in main.js)
 export function initMainMenu(ctx) {
   const {
     menuOverlayEl, hint, dashPanel, crosshair, modeIndicator,
@@ -52,7 +54,8 @@ export function initMainMenu(ctx) {
     cameraState.orbitPitch = ORBIT_PITCH_REST
 
     manipulator.setState(RobotState.DRIBBLE)
-    if (ctx.basketball) ctx.basketball.setState(BallState.HANDLED)
+    const ball = ctx.getBasketball()
+    if (ball) ball.setState(BallState.HANDLED)
     resetDribbleState()
     clearAllCollisionCooldowns()
 
