@@ -481,7 +481,7 @@ let BALL_OFFSET_DOWN = 12
 // visivamente troppo vicino alla camera/al polso — extra distanza lungo la
 // stessa direzione, non una nuova geometria (vedi setBallRestOffset)
 let BALL_REST_EXTRA_OFFSET = 0.08
-// offset yaw del braccio in Play (gradi, sommato a orbitYaw ogni frame) e
+// offset yaw del braccio in Play (gradi, sommato a cameraState.orbitYaw ogni frame) e
 // altezza del crosshair (px sopra il centro schermo) — anche questi
 // dichiarati qui per lo stesso motivo di BALL_*: letti già dal setup del
 // debug menu sotto
@@ -563,7 +563,7 @@ let SHOOT_LINK1_RELEASE_DEG = 15
 let SHOOT_RELEASE_LEAD = 0.25     // frazione di SHOOT_RELEASE_DURATION prima che il gomito inizi a muoversi
 let SHOOT_RELEASE_POINT = 0.8     // frazione di 'release' a cui la palla lascia davvero la paletta
 // quanto resta manipulator.state = HANDLING DOPO il rilascio vero (vedi
-// shootReleased) prima di passare a NO_BALL — per non sganciare di scatto
+// shootingState.released) prima di passare a NO_BALL — per non sganciare di scatto
 // la camera libera esattamente mentre la palla parte (altrimenti il
 // crosshair salta via a metà tiro, sembra che punti altrove)
 let SHOOT_STATE_TRANSITION_DELAY = 0.35
@@ -577,7 +577,7 @@ let SHOOT_ELBOW_AIM_COUPLING = 1
 // pitch della camera durante la presa) sia in updateShootAnimation (stessa
 // formula durante il tiro vero) — un solo posto invece di due copie
 function computeAimPitchOffset() {
-  return (orbitPitch - ORBIT_PITCH_REST) * SHOOT_ELBOW_AIM_COUPLING
+  return (cameraState.orbitPitch - ORBIT_PITCH_REST) * SHOOT_ELBOW_AIM_COUPLING
 }
 // offset di tilt della paletta (sommato sopra state.paddleTilt, che resta
 // la "forma"/baseline di presa): a offset=0 la paletta è già piatta
@@ -812,7 +812,7 @@ const hint = document.getElementById('hint')
 // guardia: senza questa, il tiro (click sinistro, vedi sezione Tiro più
 // sotto) richiamerebbe lock() anche a pointer già agganciato ogni volta —
 // innocuo di per sé ma non necessario
-renderer.domElement.addEventListener('click', () => { if (!controls.isLocked && mode !== 'menu') controls.lock() })
+renderer.domElement.addEventListener('click', () => { if (!controls.isLocked && menuState.mode !== 'menu') controls.lock() })
 controls.addEventListener('lock', () => hint.style.display = 'none')
 // il tasto M (sotto) chiama anch'esso controls.unlock() per un motivo
 // diverso (forzare un nuovo "click per entrare" nel cambio Spectate/Play,
@@ -1090,13 +1090,13 @@ const camRight = new THREE.Vector3()
 // --- Modalità Spectate/Play (tasto M) ---
 // Spectate: free-fly esistente. Play: camera in terza persona che orbita
 // il robot col mouse (stesso pointer lock del free-fly, ma qui muove un
-// angolo orbitYaw/orbitPitch invece della camera direttamente); WASD è
+// angolo cameraState.orbitYaw/cameraState.orbitPitch invece della camera direttamente); WASD è
 // relativo a dove guarda ORA la camera (non assi mondo fissi). Le ruote
 // (yaw dell'intero wheelsGroup) puntano comunque verso il vettore di
 // movimento totale risultante via atan2.
 
 // converte un angolo orizzontale (stessa convenzione di robotFacing/
-// orbitYaw) in un vettore direzione — usato per camForward, dashDirection
+// cameraState.orbitYaw) in un vettore direzione — usato per camForward, dashDirection
 // e l'offset della camera in Play, invece di scrivere sin/cos a mano ogni
 // volta (un bug di segno su una di queste formule scritte a mano ha già
 // causato l'inversione di A/D)
@@ -1120,7 +1120,10 @@ let timeOfDay = TimeOfDay.DAY
 // main menu è aperto non si può passare a 'play' col tasto M, e la camera
 // segue l'orbita lenta del menu invece della logica normale. Diventa
 // 'spectate' quando il menu si chiude (fine flusso di selezione)
-let mode = 'menu'
+// stato del menu consolidato in un unico oggetto (stesso principio di
+// shootingState/cameraState) invece di `let` sciolti a modulo — refactor
+// puro di organizzazione, nessun cambio di comportamento
+const menuState = { mode: 'menu' }
 const modeIndicator = document.getElementById('mode-indicator')
 let robotFacing = 0 // yaw ruote/robot (rad), persiste quando fermo
 const moveVec = new THREE.Vector3()
@@ -1157,12 +1160,16 @@ const CHASE_DISTANCE_ZOOM_LERP_SPEED = 2.5
 // alimentano — così lo scatto sparisce indipendentemente da quale formula è
 // in uso
 const CAMERA_POSITION_LERP_SPEED = 10
-let currentChaseDistance = CHASE_DISTANCE
-let currentHeightBoost = 0
+// stato camera consolidato in un unico oggetto (stesso principio di
+// shootingState/realDribbleState) invece di `let` sciolti a modulo —
+// refactor puro di organizzazione, nessun cambio di formula/comportamento
+const cameraState = {}
+cameraState.currentChaseDistance = CHASE_DISTANCE
+cameraState.currentHeightBoost = 0
 // in HANDLING niente offset laterale: il braccio va in linea con la
 // visuale invece che di profilo, interpolato come il resto (vedi
 // ARM_YAW_OFFSET_DEG sopra per l'offset normale fuori da HANDLING)
-let currentArmYawOffsetDeg = ARM_YAW_OFFSET_DEG
+cameraState.currentArmYawOffsetDeg = ARM_YAW_OFFSET_DEG
 const CHASE_HEIGHT = 180
 const LOOK_HEIGHT = 80
 const ORBIT_SENSITIVITY = 0.0025
@@ -1171,15 +1178,15 @@ const ORBIT_SENSITIVITY = 0.0025
 // ARM_YAW_OFFSET_DEG (dichiarata più sopra, tarabile da debug → Play Aim)
 // resta comunque agganciato all'orbit (gira insieme alla camera), ma
 // sfalsato di lato — così il palleggio si vede di profilo
-let orbitYaw = 0
+cameraState.orbitYaw = 0
 // pitch iniziale che riproduce l'inquadratura di prima (stessa proporzione
 // altezza/distanza), poi libero via mouse entro un range che non ribalta
 const ORBIT_PITCH_REST = Math.atan2(CHASE_HEIGHT, CHASE_DISTANCE)
-let orbitPitch = ORBIT_PITCH_REST
+cameraState.orbitPitch = ORBIT_PITCH_REST
 const ORBIT_PITCH_MIN = 0.05
 const ORBIT_PITCH_MAX = 0.9 // avvicinato a ORBIT_PITCH_MAX_HANDLING (meno differenza tra i due stati, transizione meno marcata)
-// orbitPitch CRESCENTE porta la camera più in alto e vicina, sopra la testa
-// del robot → guarda più IN GIÙ. Quindi "guarda su" è l'opposto: orbitPitch
+// cameraState.orbitPitch CRESCENTE porta la camera più in alto e vicina, sopra la testa
+// del robot → guarda più IN GIÙ. Quindi "guarda su" è l'opposto: cameraState.orbitPitch
 // che SCENDE verso lo zero (camera bassa/lontana, quasi alla pari del
 // target) e oltre, in negativo (camera sotto il target, guarda in su per
 // davvero). In HANDLING si abbassa il minimo (non si alza il massimo) per
@@ -1222,18 +1229,18 @@ let dashCooldown = 0     // secondi rimanenti prima che il dash sia di nuovo pro
 let dashTimeRemaining = 0 // secondi rimanenti dello scatto in corso
 
 document.addEventListener('keydown', e => {
-  if (e.code !== 'ShiftLeft' || e.repeat || mode !== 'play' || dashCooldown > 0) return
+  if (e.code !== 'ShiftLeft' || e.repeat || menuState.mode !== 'play' || dashCooldown > 0) return
   angleToForward(robotFacing, dashDirection)
   dashTimeRemaining = DASH_DURATION
   dashCooldown = DASH_COOLDOWN_TIME
 })
 
 document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyM' || e.repeat || mode === 'menu') return
-  mode = mode === 'spectate' ? 'play' : 'spectate'
-  modeIndicator.textContent = `MODE: ${mode.toUpperCase()}`
-  dashPanel.classList.toggle('hidden', mode !== 'play')
-  crosshair.classList.toggle('hidden', mode !== 'play')
+  if (e.code !== 'KeyM' || e.repeat || menuState.mode === 'menu') return
+  menuState.mode = menuState.mode === 'spectate' ? 'play' : 'spectate'
+  modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
+  dashPanel.classList.toggle('hidden', menuState.mode !== 'play')
+  crosshair.classList.toggle('hidden', menuState.mode !== 'play')
   // forza un nuovo click-per-entrare nel cambio modalità, per evitare
   // che un delta mouse residuo salti da uno schema di controllo all'altro
   // — suppressPauseOnUnlock: questo unlock è un dettaglio del cambio
@@ -1243,17 +1250,17 @@ document.addEventListener('keydown', e => {
   // premuto, non restare bloccati in HANDLING senza modo di rilasciarlo
   // (non se un tiro è in corso: interromperlo a metà lascerebbe l'animazione
   // e lo stato palla in una via di mezzo incoerente)
-  if (mode !== 'play' && manipulator.state === RobotState.HANDLING && shootPhase === 'idle') releaseBallHandling()
+  if (menuState.mode !== 'play' && manipulator.state === RobotState.HANDLING && shootingState.phase === 'idle') releaseBallHandling()
 })
 
 document.addEventListener('mousemove', e => {
-  if (mode !== 'play' || !controls.isLocked) return
-  orbitYaw -= e.movementX * ORBIT_SENSITIVITY
+  if (menuState.mode !== 'play' || !controls.isLocked) return
+  cameraState.orbitYaw -= e.movementX * ORBIT_SENSITIVITY
   const isHandlingNow = manipulator.state === RobotState.HANDLING
   const pitchMin = isHandlingNow ? ORBIT_PITCH_MIN_HANDLING : ORBIT_PITCH_MIN
   const pitchMax = isHandlingNow ? ORBIT_PITCH_MAX_HANDLING : ORBIT_PITCH_MAX
-  orbitPitch = THREE.MathUtils.clamp(
-    orbitPitch + e.movementY * ORBIT_SENSITIVITY,
+  cameraState.orbitPitch = THREE.MathUtils.clamp(
+    cameraState.orbitPitch + e.movementY * ORBIT_SENSITIVITY,
     pitchMin,
     pitchMax
   )
@@ -1270,9 +1277,9 @@ renderer.domElement.addEventListener('contextmenu', e => e.preventDefault())
 // in DRIBBLE dopo la "ricarica"
 let rightMouseDown = false
 document.addEventListener('mousedown', e => {
-  if (e.button !== 2 || mode !== 'play') return
+  if (e.button !== 2 || menuState.mode !== 'play') return
   rightMouseDown = true
-  if (shootPhase !== 'idle') return // non interrompere un tiro in corso
+  if (shootingState.phase !== 'idle') return // non interrompere un tiro in corso
   // senza la palla non c'è niente da stringere in mano: tasto destro non fa
   // nulla finché non la si raccoglie (pickup automatico toccandola a terra)
   if (!basketball || basketball.state !== BallState.HANDLED) return
@@ -1281,16 +1288,16 @@ document.addEventListener('mousedown', e => {
   // il salto si vede scorrere comunque: camera.quaternion.slerp verso il
   // bersaglio (vedi animate()) è l'UNICO stadio di smoothing sulla rotazione,
   // niente doppio lerp in cascata qui sopra
-  orbitPitch = ORBIT_PITCH_REST
+  cameraState.orbitPitch = ORBIT_PITCH_REST
   manipulator.setState(RobotState.HANDLING)
   // altrimenti resterebbe bloccato a true per sempre dopo il primo tiro,
   // impedendo alla preview di traiettoria di riapparire quando si riafferra
-  shootReleased = false
+  shootingState.released = false
 })
 document.addEventListener('mouseup', e => {
   if (e.button !== 2) return
   rightMouseDown = false
-  if (manipulator.state !== RobotState.HANDLING || shootPhase !== 'idle') return
+  if (manipulator.state !== RobotState.HANDLING || shootingState.phase !== 'idle') return
   releaseBallHandling()
 })
 // riparte da un 'push' pulito, non da dove si era fermata la palla prima
@@ -1310,10 +1317,10 @@ function releaseBallHandling() {
   // ORBIT_PITCH_MIN_HANDLING (fino a -0.9) è valido solo mentre si è in
   // HANDLING — il clamp normale (ORBIT_PITCH_MIN=0.05) si applica di nuovo
   // solo al prossimo movimento del mouse, quindi se si rilascia il tasto
-  // destro senza muovere il mouse orbitPitch resta a un valore fuori dal
+  // destro senza muovere il mouse cameraState.orbitPitch resta a un valore fuori dal
   // range normale e la camera finisce sotto il pavimento. Riportarlo subito
   // dentro il range appena si torna in DRIBBLE evita il buco
-  orbitPitch = THREE.MathUtils.clamp(orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+  cameraState.orbitPitch = THREE.MathUtils.clamp(cameraState.orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
   resetDribbleState()
   handlingGrip = 0
   manipulator.controls.setGrip(0)
@@ -1342,25 +1349,32 @@ function getShotDirection(out) {
 // (vedi updateShootAnimation), non subito al click: prima c'è tutta
 // l'animazione di windup+rilascio, con la palla ancora incollata alla
 // paletta come in HANDLING normale
-let shootPhase = 'idle' // 'idle' | 'windup' | 'release'
-let shootPhaseT = 0
-let shootReleased = false // per-tiro: true dal frame in cui la palla lascia davvero la paletta
-// catturata al momento del rilascio (posizione del ROBOT, non della palla
-// quando arriva al canestro) — la regola dei 2/3 punti dipende da dove si
-// tirava, non da dove si trova la palla quando entra
-let shotWasInsideArc = false
-let shootStateTransitionTimer = 0 // secondi rimanenti prima del vero cambio di stato (vedi SHOOT_STATE_TRANSITION_DELAY)
-// pose di gomito/link1 al momento del click, punto di partenza del lerp di
-// 'windup' — senza questo la prima svg dello windup scatterebbe dalla posa
-// di presa direttamente al target invece di scorrere con continuità
-let shootStartElbowOffset = 0
-let shootStartLink1Offset = 0
-let shootStartGrip = 0
-let shootStartTilt = 0
-// aimPitchOffset "congelato" all'istante in cui parte 'recover' (vedi sotto):
-// il punto di partenza del suo lerp verso 0, calcolato una volta sola invece
-// di continuare a inseguire la camera anche durante il recupero
-let shootRecoverStartAimPitch = 0
+// stato dello Shooting System consolidato in un unico oggetto (stesso
+// principio di dribbleState/realDribbleState per il palleggio) invece di
+// una dozzina di `let` sciolti a modulo — nessun cambio di comportamento,
+// solo raccolti insieme
+const shootingState = {
+  phase: 'idle',      // 'idle' | 'windup' | 'release' | 'recover'
+  phaseT: 0,
+  released: false,    // per-tiro: true dal frame in cui la palla lascia davvero la paletta
+  // catturata al momento del rilascio (posizione del ROBOT, non della palla
+  // quando arriva al canestro) — la regola dei 2/3 punti dipende da dove si
+  // tirava, non da dove si trova la palla quando entra
+  wasInsideArc: false,
+  stateTransitionTimer: 0, // secondi rimanenti prima del vero cambio di stato (vedi SHOOT_STATE_TRANSITION_DELAY)
+  // pose di gomito/link1/grip/tilt al momento del click, punto di partenza
+  // del lerp di 'windup' — senza questo la prima svg dello windup
+  // scatterebbe dalla posa di presa direttamente al target invece di
+  // scorrere con continuità
+  startElbowOffset: 0,
+  startLink1Offset: 0,
+  startGrip: 0,
+  startTilt: 0,
+  // aimPitchOffset "congelato" all'istante in cui parte 'recover' (vedi
+  // sotto): il punto di partenza del suo lerp verso 0, calcolato una volta
+  // sola invece di continuare a inseguire la camera anche durante il recupero
+  recoverStartAimPitch: 0,
+}
 const shotVelocity = new THREE.Vector3()
 // dopo un urto (backboard/ferro/...), quanto ignorare NUOVE collisioni CON
 // LO STESSO OGGETTO: con restituzione bassa (rimbalzo morbido voluto) la
@@ -1402,16 +1416,16 @@ let pickupPhase = 'idle' // 'idle' | 'active'
 let pickupPhaseT = 0
 
 document.addEventListener('mousedown', e => {
-  if (e.button !== 0 || mode !== 'play' || !controls.isLocked) return
-  if (manipulator.state !== RobotState.HANDLING || shootPhase !== 'idle' || !basketball) return
+  if (e.button !== 0 || menuState.mode !== 'play' || !controls.isLocked) return
+  if (manipulator.state !== RobotState.HANDLING || shootingState.phase !== 'idle' || !basketball) return
   const [shootTriggerElbowAmplitude, shootTriggerLink1Amplitude] = dribbleAmplitudesRad()
-  shootStartElbowOffset = dribbleArmEase * shootTriggerElbowAmplitude
-  shootStartLink1Offset = dribbleArmEase * shootTriggerLink1Amplitude
-  shootStartGrip = handlingGrip
-  shootStartTilt = handlingTiltOffset
-  shootPhase = 'windup'
-  shootPhaseT = 0
-  shootReleased = false
+  shootingState.startElbowOffset = dribbleArmEase * shootTriggerElbowAmplitude
+  shootingState.startLink1Offset = dribbleArmEase * shootTriggerLink1Amplitude
+  shootingState.startGrip = handlingGrip
+  shootingState.startTilt = handlingTiltOffset
+  shootingState.phase = 'windup'
+  shootingState.phaseT = 0
+  shootingState.released = false
   clearAllCollisionCooldowns()
 })
 
@@ -1423,11 +1437,11 @@ document.addEventListener('mousedown', e => {
 // interpolato) degli offset di tiro: è un tasto di test/debug, non fa parte
 // del flusso di gioco normale
 document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyR' || e.repeat || mode !== 'play') return
-  shootPhase = 'idle'
-  shootPhaseT = 0
-  shootReleased = false
-  shootStateTransitionTimer = 0
+  if (e.code !== 'KeyR' || e.repeat || menuState.mode !== 'play') return
+  shootingState.phase = 'idle'
+  shootingState.phaseT = 0
+  shootingState.released = false
+  shootingState.stateTransitionTimer = 0
   clearAllCollisionCooldowns()
   manipulator.controls.setAimPitch(0)
   manipulator.controls.setShootTilt(0)
@@ -1742,7 +1756,7 @@ function isHoopCrossing(previousPos, position, hoop) {
 }
 
 // Point System: 2 punti se si tirava da dentro l'arco dei 3 punti, 3 se da
-// fuori (shotWasInsideArc, catturato al rilascio — non dove si trova la
+// fuori (shootingState.wasInsideArc, catturato al rilascio — non dove si trova la
 // palla quando entra), canestro in uno qualunque dei due ferri vale
 let score = 0
 const scoreValueEl = document.getElementById('score-value')
@@ -1755,7 +1769,7 @@ function checkHoopScore(previousPos, position) {
   for (const hoop of collisionWorld.hoops) {
     if (isHoopCrossing(previousPos, position, hoop)) {
       console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
-      addScore(shotWasInsideArc ? 2 : 3)
+      addScore(shootingState.wasInsideArc ? 2 : 3)
       sfx.playScore()
     }
   }
@@ -1911,9 +1925,9 @@ function updatePickup(delta) {
     resetDribbleState()
     // senza questo resta true dal tiro che ha liberato la palla: animate()
     // instrada su updateShotFlight finché manipulator.state===NO_BALL O
-    // shootReleased — con questo flag ancora true il palleggio non riparte
+    // shootingState.released — con questo flag ancora true il palleggio non riparte
     // mai anche se lo stato è già tornato DRIBBLE
-    shootReleased = false
+    shootingState.released = false
   }
 }
 
@@ -1933,12 +1947,12 @@ function updatePickup(delta) {
 // link1, aim, tilt, presa) verso una posa neutra, invece di scattarci sopra
 // di colpo — 'tutte le animazioni interpolate', nessun salto secco
 function updateShootAnimation(delta) {
-  shootPhaseT += delta
+  shootingState.phaseT += delta
   const elbowWindupTarget = THREE.MathUtils.degToRad(SHOOT_ELBOW_WINDUP_DEG)
   const link1WindupTarget = THREE.MathUtils.degToRad(SHOOT_LINK1_WINDUP_DEG)
   // aggancio elbow→pitch camera: stessa formula di ELBOW_PITCH_COUPLING nel
   // Play normale (lì disattivata), qui a piena intensità di default — usa
-  // orbitPitch (il bersaglio "vero" della mira, non un valore intermedio)
+  // cameraState.orbitPitch (il bersaglio "vero" della mira, non un valore intermedio)
   const aimPitchOffset = computeAimPitchOffset()
 
   // countdown SEMPRE attivo (non solo durante 'release'): se SHOOT_STATE_
@@ -1947,9 +1961,9 @@ function updateShootAnimation(delta) {
   // di 'release' rimanenti), la fase passa a 'recover' col timer ancora a
   // metà — se il countdown vivesse solo dentro il branch 'release' si
   // blocca lì per sempre e NO_BALL/basketball FREE non scattano mai
-  if (shootReleased && shootStateTransitionTimer > 0) {
-    shootStateTransitionTimer -= delta
-    if (shootStateTransitionTimer <= 0) {
+  if (shootingState.released && shootingState.stateTransitionTimer > 0) {
+    shootingState.stateTransitionTimer -= delta
+    if (shootingState.stateTransitionTimer <= 0) {
       manipulator.setState(RobotState.NO_BALL)
       basketball.setState(BallState.FREE)
       // stessa sicurezza di releaseBallHandling(): ORBIT_PITCH_MIN_HANDLING
@@ -1958,23 +1972,23 @@ function updateShootAnimation(delta) {
       // pitch così estremo manda la camera sotto il pavimento (mai
       // riclampata altrimenti, il mousemove lo fa solo al prossimo
       // movimento del mouse)
-      orbitPitch = THREE.MathUtils.clamp(orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+      cameraState.orbitPitch = THREE.MathUtils.clamp(cameraState.orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
     }
   }
 
-  if (shootPhase === 'windup') {
-    const t = SHOOT_EASE(Math.min(shootPhaseT / SHOOT_WINDUP_DURATION, 1))
-    const elbowOffset = THREE.MathUtils.lerp(shootStartElbowOffset, elbowWindupTarget, t)
-    const link1Offset = THREE.MathUtils.lerp(shootStartLink1Offset, link1WindupTarget, t)
+  if (shootingState.phase === 'windup') {
+    const t = SHOOT_EASE(Math.min(shootingState.phaseT / SHOOT_WINDUP_DURATION, 1))
+    const elbowOffset = THREE.MathUtils.lerp(shootingState.startElbowOffset, elbowWindupTarget, t)
+    const link1Offset = THREE.MathUtils.lerp(shootingState.startLink1Offset, link1WindupTarget, t)
     manipulator.controls.setAimPitch(aimPitchOffset)
     manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
-    // tre fasi, non due: orizzontale (shootStartTilt, ≈0 da HANDLING) → su
+    // tre fasi, non due: orizzontale (shootingState.startTilt, ≈0 da HANDLING) → su
     // (SHOOT_TILT_WINDUP_PEAK, oltre il piatto) qui nel windup, poi
     // 'release' la riporta da lì verso la posa inclinata di rilascio
-    manipulator.controls.setShootTilt(THREE.MathUtils.lerp(shootStartTilt, SHOOT_TILT_WINDUP_PEAK, t))
-    if (shootPhaseT >= SHOOT_WINDUP_DURATION) { shootPhase = 'release'; shootPhaseT = 0 }
-  } else if (shootPhase === 'release') {
-    const t = Math.min(shootPhaseT / SHOOT_RELEASE_DURATION, 1)
+    manipulator.controls.setShootTilt(THREE.MathUtils.lerp(shootingState.startTilt, SHOOT_TILT_WINDUP_PEAK, t))
+    if (shootingState.phaseT >= SHOOT_WINDUP_DURATION) { shootingState.phase = 'release'; shootingState.phaseT = 0 }
+  } else if (shootingState.phase === 'release') {
+    const t = Math.min(shootingState.phaseT / SHOOT_RELEASE_DURATION, 1)
     const easeT = SHOOT_EASE(t)
     const link1Offset = THREE.MathUtils.lerp(link1WindupTarget, THREE.MathUtils.degToRad(SHOOT_LINK1_RELEASE_DEG), easeT)
     // il gomito parte con un ritardo (SHOOT_RELEASE_LEAD), poi copre tutto
@@ -1985,14 +1999,14 @@ function updateShootAnimation(delta) {
     manipulator.controls.setAimPitch(aimPitchOffset)
     manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
     // dal picco 'su' del windup verso la posa inclinata di rilascio, in
-    // sincrono con link1 (stessa easeT) — non da shootStartTilt (quello era
+    // sincrono con link1 (stessa easeT) — non da shootingState.startTilt (quello era
     // il punto di partenza del windup, non di questa fase)
     manipulator.controls.setShootTilt(THREE.MathUtils.lerp(SHOOT_TILT_WINDUP_PEAK, SHOOT_TILT_TARGET, easeT))
 
-    if (!shootReleased && t >= SHOOT_RELEASE_POINT) {
+    if (!shootingState.released && t >= SHOOT_RELEASE_POINT) {
       getShotDirection(shotVelocity).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
-      shotWasInsideArc = isInsideThreePointArc(manipulator.root.position)
-      shootReleased = true
+      shootingState.wasInsideArc = isInsideThreePointArc(manipulator.root.position)
+      shootingState.released = true
       sfx.playShoot()
       // NON manipulator.setState(NO_BALL) qui: farlo nello STESSO istante in
       // cui parte il volo sgancia subito la camera dalla vista libera di
@@ -2002,29 +2016,29 @@ function updateShootAnimation(delta) {
       // direzione catturata sopra è corretta. Il cambio di stato vero
       // (camera + velocità dimezzata) parte solo dopo SHOOT_STATE_TRANSITION_
       // DELAY secondi, per sicurezza — updateShotFlight nel frattempo parte
-      // comunque (vedi guardia su shootReleased in animate())
-      shootStateTransitionTimer = SHOOT_STATE_TRANSITION_DELAY
+      // comunque (vedi guardia su shootingState.released in animate())
+      shootingState.stateTransitionTimer = SHOOT_STATE_TRANSITION_DELAY
     }
-    if (shootPhaseT >= SHOOT_RELEASE_DURATION) {
-      shootPhase = 'recover'
-      shootPhaseT = 0
-      shootRecoverStartAimPitch = aimPitchOffset
+    if (shootingState.phaseT >= SHOOT_RELEASE_DURATION) {
+      shootingState.phase = 'recover'
+      shootingState.phaseT = 0
+      shootingState.recoverStartAimPitch = aimPitchOffset
     }
   } else { // 'recover'
-    const t = SHOOT_EASE(Math.min(shootPhaseT / SHOOT_RECOVER_DURATION, 1))
+    const t = SHOOT_EASE(Math.min(shootingState.phaseT / SHOOT_RECOVER_DURATION, 1))
     const elbowOffset = THREE.MathUtils.lerp(THREE.MathUtils.degToRad(SHOOT_ELBOW_RELEASE_DEG), 0, t)
     const link1Offset = THREE.MathUtils.lerp(THREE.MathUtils.degToRad(SHOOT_LINK1_RELEASE_DEG), 0, t)
-    const recoverAimPitch = THREE.MathUtils.lerp(shootRecoverStartAimPitch, 0, t)
+    const recoverAimPitch = THREE.MathUtils.lerp(shootingState.recoverStartAimPitch, 0, t)
     const tiltOffset = THREE.MathUtils.lerp(SHOOT_TILT_TARGET, 0, t)
-    const gripOffset = THREE.MathUtils.lerp(shootStartGrip, 0, t)
+    const gripOffset = THREE.MathUtils.lerp(shootingState.startGrip, 0, t)
     manipulator.controls.setAimPitch(recoverAimPitch)
     manipulator.controls.setDribbleOffsets(elbowOffset, link1Offset)
     manipulator.controls.setShootTilt(tiltOffset)
     manipulator.controls.setGrip(gripOffset)
     handlingGrip = gripOffset
 
-    if (shootPhaseT >= SHOOT_RECOVER_DURATION) {
-      shootPhase = 'idle'
+    if (shootingState.phaseT >= SHOOT_RECOVER_DURATION) {
+      shootingState.phase = 'idle'
       // dribbleArmEase (uno scalare unico) non può rappresentare le pose
       // indipendenti usate sopra: riparte da zero, ma solo ORA che la posa
       // VISIVA è già a 0 (fine del lerp appena sopra) — nessuno scatto,
@@ -2035,7 +2049,7 @@ function updateShootAnimation(delta) {
 
   // finché la palla non è ancora partita resta incollata alla paletta,
   // stessa logica di updateHandling/updateDribble
-  if (!shootReleased) {
+  if (!shootingState.released) {
     // stesso motivo di updateHandling: manipulator.ballRestPoint segue il
     // vero punto di convergenza della V, corretto per qualunque tilt
     manipulator.ballRestPoint.updateWorldMatrix(true, false)
@@ -2072,7 +2086,7 @@ function showMenuScreen(id) {
   document.querySelectorAll('.menu-screen').forEach(el => el.classList.toggle('active', el.id === id))
   // l'anteprima robot (canvas live, palleggio animato) anima solo mentre
   // la sua card è davvero visibile — niente sprecato sulle altre schermate
-  robotPreviewActive = (id === 'menu-robot')
+  menuState.robotPreviewActive = (id === 'menu-robot')
 }
 document.querySelectorAll('[data-goto]').forEach(el => {
   el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
@@ -2081,14 +2095,14 @@ document.querySelectorAll('[data-goto]').forEach(el => {
 // OPTIONS è raggiungibile sia dal main menu (menu-main) sia dalla pausa in
 // partita (menu-pause) — il tasto indietro deve tornare da dove si è
 // entrati, non sempre allo stesso posto fisso
-let optionsReturnScreen = 'menu-main'
+menuState.optionsReturnScreen = 'menu-main'
 document.querySelectorAll('[data-goto-options-from]').forEach(el => {
   el.addEventListener('click', () => {
-    optionsReturnScreen = el.dataset.gotoOptionsFrom
+    menuState.optionsReturnScreen = el.dataset.gotoOptionsFrom
     showMenuScreen('menu-options')
   })
 })
-document.getElementById('menu-options-back-btn').addEventListener('click', () => showMenuScreen(optionsReturnScreen))
+document.getElementById('menu-options-back-btn').addEventListener('click', () => showMenuScreen(menuState.optionsReturnScreen))
 
 // --- Pausa in partita (ESC) ---
 // idempotente (guardia su mode==='menu') perché ci sono DUE modi in cui
@@ -2100,14 +2114,14 @@ document.getElementById('menu-options-back-btn').addEventListener('click', () =>
 // il vecchio hint "Click per entrare"), la pausa vera scattava solo alla
 // seconda pressione. Aprirla anche da 'unlock' copre il caso mancante
 function openPauseMenu() {
-  if (mode === 'menu') return
-  mode = 'menu'
+  if (menuState.mode === 'menu') return
+  menuState.mode = 'menu'
   menuOverlayEl.style.display = 'flex'
   showMenuScreen('menu-pause')
   hint.style.display = 'none' // sovrascrive quanto fatto da 'unlock' (vedi sopra) — c'è un vero menu ora
 }
 document.addEventListener('keydown', e => {
-  if (e.code !== 'Escape' || (mode !== 'play' && mode !== 'spectate')) return
+  if (e.code !== 'Escape' || (menuState.mode !== 'play' && menuState.mode !== 'spectate')) return
   if (controls.isLocked) controls.unlock() // farà scattare anche il listener 'unlock' sopra, openPauseMenu() è idempotente
   else openPauseMenu()
 })
@@ -2123,8 +2137,8 @@ function resetGameplayState() {
   robotFacing = 0
   wheelsCurrentAngle = -Math.PI / 2 // combacia col valore iniziale del `let` a modulo
   manipulator.controls.setWheelsYaw(wheelsCurrentAngle)
-  orbitYaw = 0
-  orbitPitch = ORBIT_PITCH_REST
+  cameraState.orbitYaw = 0
+  cameraState.orbitPitch = ORBIT_PITCH_REST
 
   manipulator.setState(RobotState.DRIBBLE)
   if (basketball) basketball.setState(BallState.HANDLED)
@@ -2134,11 +2148,11 @@ function resetGameplayState() {
   dashCooldown = 0
   dashTimeRemaining = 0
 
-  shootPhase = 'idle'
-  shootPhaseT = 0
-  shootReleased = false
-  shootStateTransitionTimer = 0
-  shotWasInsideArc = false
+  shootingState.phase = 'idle'
+  shootingState.phaseT = 0
+  shootingState.released = false
+  shootingState.stateTransitionTimer = 0
+  shootingState.wasInsideArc = false
   shotVelocity.set(0, 0, 0)
   manipulator.controls.setShootTilt(0)
 
@@ -2171,8 +2185,8 @@ document.getElementById('menu-back-to-main-btn').addEventListener('click', () =>
 // scatta nasconde #hint da solo (vedi il listener più in alto)
 function enterPlayMode() {
   menuOverlayEl.style.display = 'none'
-  mode = 'play'
-  modeIndicator.textContent = `MODE: ${mode.toUpperCase()}`
+  menuState.mode = 'play'
+  modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
   controls.lock()
 }
 // funzione a parte (non solo dentro il listener) perché servirà anche da
@@ -2253,7 +2267,7 @@ document.getElementById('opt-fov').addEventListener('input', e => {
 // renderer resta vivo e il canvas stesso finisce nella card: il robot
 // palleggia davvero (stessa API controls.setDribbleOffsets del palleggio
 // vero), animato finché la schermata ROBOT è quella attiva
-let robotPreviewActive = false
+menuState.robotPreviewActive = false
 function renderRobotCardPreview() {
   const previewSize = 200
   const previewRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
@@ -2328,7 +2342,7 @@ function renderRobotCardPreview() {
 
   function tickPreview() {
     requestAnimationFrame(tickPreview)
-    if (!robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
+    if (!menuState.robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
     const dt = Math.min(previewClock.getDelta(), 0.1) // stesso clamp del delta principale in animate()
     stepDribble(previewDribbleState, previewRobot, previewBall.position, dt)
     previewRenderer.render(previewScene, previewCamera)
@@ -2412,13 +2426,13 @@ function animate() {
   // mentre il main menu è aperto: solo l'orbita lenta della camera, niente
   // altro (palleggio/fisica/input di gioco fermi, il campo è "vuoto" per
   // costruzione in questa fase) — poi esce subito, non gira il resto del loop
-  if (mode === 'menu') {
+  if (menuState.mode === 'menu') {
     updateMenuCameraOrbit(delta)
     composer.render()
     return
   }
 
-  if (mode === 'spectate' && controls.isLocked) {
+  if (menuState.mode === 'spectate' && controls.isLocked) {
     const speed = 300 * delta
     camera.getWorldDirection(camDir)
     camRight.crossVectors(camDir, camera.up).normalize()
@@ -2431,26 +2445,26 @@ function animate() {
     if (keys['ShiftLeft']) camera.position.y -= speed
   }
 
-  if (mode === 'play') {
+  if (menuState.mode === 'play') {
     // R1 (base del manipolatore) segue l'orbit yaw della camera: stessa
     // convenzione sin/cos usata per camForward/robotFacing, quindi a
-    // orbitYaw=0 la base è a riposo (nessuna rotazione extra) e il
+    // cameraState.orbitYaw=0 la base è a riposo (nessuna rotazione extra) e il
     // braccio punta già "in avanti" di default. Indipendente dal
     // movimento: si mira col mouse, ci si muove con WASD
     const isHandlingNow = manipulator.state === RobotState.HANDLING
     const armYawLerpFactor = 1 - Math.exp(-HANDLING_TRANSITION_SPEED * delta)
-    currentArmYawOffsetDeg += ((isHandlingNow ? 0 : ARM_YAW_OFFSET_DEG) - currentArmYawOffsetDeg) * armYawLerpFactor
-    manipulator.controls.setAimYaw(orbitYaw + THREE.MathUtils.degToRad(currentArmYawOffsetDeg))
-    // guardare su/giù (orbitPitch) alza/abbassa di poco l'end effector,
+    cameraState.currentArmYawOffsetDeg += ((isHandlingNow ? 0 : ARM_YAW_OFFSET_DEG) - cameraState.currentArmYawOffsetDeg) * armYawLerpFactor
+    manipulator.controls.setAimYaw(cameraState.orbitYaw + THREE.MathUtils.degToRad(cameraState.currentArmYawOffsetDeg))
+    // guardare su/giù (cameraState.orbitPitch) alza/abbassa di poco l'end effector,
     // ruotando il gomito e non l'ultimo link — coupling piccolo apposta.
     // setAimPitch gestisce internamente anche il rilivellamento della
     // paletta (la cinematica gomito+polso resta dentro manipulator.js)
-    manipulator.controls.setAimPitch((orbitPitch - ORBIT_PITCH_REST) * ELBOW_PITCH_COUPLING)
+    manipulator.controls.setAimPitch((cameraState.orbitPitch - ORBIT_PITCH_REST) * ELBOW_PITCH_COUPLING)
 
-    // assi camera flattened sul piano orizzontale (solo orbitYaw, non
+    // assi camera flattened sul piano orizzontale (solo cameraState.orbitYaw, non
     // pitch) così W spinge sempre in avanti sul terreno, non in diagonale
     // verso l'alto/basso quando la camera è inclinata
-    angleToForward(orbitYaw, camForward)
+    angleToForward(cameraState.orbitYaw, camForward)
     rotateRight(camForward, camRightFlat)
 
     moveVec.set(0, 0, 0)
@@ -2492,8 +2506,8 @@ function animate() {
     const isHandling = manipulator.state === RobotState.HANDLING
     const zoomLerpFactor = 1 - Math.exp(-CHASE_DISTANCE_LERP_SPEED * delta)
     const zoomDistanceLerpFactor = 1 - Math.exp(-CHASE_DISTANCE_ZOOM_LERP_SPEED * delta)
-    currentChaseDistance += ((isHandling ? HANDLING_CHASE_DISTANCE : CHASE_DISTANCE) - currentChaseDistance) * zoomDistanceLerpFactor
-    currentHeightBoost += ((isHandling ? HANDLING_HEIGHT_BOOST : 0) - currentHeightBoost) * zoomLerpFactor
+    cameraState.currentChaseDistance += ((isHandling ? HANDLING_CHASE_DISTANCE : CHASE_DISTANCE) - cameraState.currentChaseDistance) * zoomDistanceLerpFactor
+    cameraState.currentHeightBoost += ((isHandling ? HANDLING_HEIGHT_BOOST : 0) - cameraState.currentHeightBoost) * zoomLerpFactor
 
     const robotPos = manipulator.root.position
     // camForward/camRightFlat già calcolati sopra per il movimento: riusati
@@ -2506,30 +2520,30 @@ function animate() {
       // camera la faceva solo guardare più dall'alto lo stesso punto, mai
       // vedere oltre. Ora pitch ruota la vista, non sposta il bersaglio:
       // si può davvero alzare lo sguardo sopra la testa del robot e vederlo
-      // scendere nell'inquadratura. Bonus: pitch e currentHeightBoost non si
+      // scendere nell'inquadratura. Bonus: pitch e cameraState.currentHeightBoost non si
       // "combattono" più — la quota è solo un'aggiunta fissa alla posizione,
       // il pitch non tocca più la posizione, solo l'orientamento
       targetCameraPos.set(
-        robotPos.x - camForward.x * currentChaseDistance + camRightFlat.x * HANDLING_CAMERA_SIDE_OFFSET,
-        robotPos.y + LOOK_HEIGHT + currentHeightBoost,
-        robotPos.z - camForward.z * currentChaseDistance + camRightFlat.z * HANDLING_CAMERA_SIDE_OFFSET
+        robotPos.x - camForward.x * cameraState.currentChaseDistance + camRightFlat.x * HANDLING_CAMERA_SIDE_OFFSET,
+        robotPos.y + LOOK_HEIGHT + cameraState.currentHeightBoost,
+        robotPos.z - camForward.z * cameraState.currentChaseDistance + camRightFlat.z * HANDLING_CAMERA_SIDE_OFFSET
       )
-      // orbitPitch diretto, senza un secondo lerp qui sopra: era un doppio
+      // cameraState.orbitPitch diretto, senza un secondo lerp qui sopra: era un doppio
       // smoothing in cascata con camera.quaternion.slerp sotto (due lag
       // esponenziali indipendenti sullo stesso segnale, a velocità diverse)
       // — per input veloci (flick del mouse) il risultato è imprevedibile
       // (scatti in avanti seguiti da correzioni all'indietro). Un solo
       // stadio di smoothing (lo slerp sotto, che esiste già apposta per
       // azzerare lo scatto tra formula e formula) è sufficiente
-      scratchEuler.set(-orbitPitch, orbitYaw + Math.PI, 0, 'YXZ')
+      scratchEuler.set(-cameraState.orbitPitch, cameraState.orbitYaw + Math.PI, 0, 'YXZ')
       targetCameraQuat.setFromEuler(scratchEuler)
     } else {
       // comportamento originale (DRIBBLE/Play normale): camera in orbita,
       // guarda sempre il robot — invariato
-      const horizDist = currentChaseDistance * Math.cos(orbitPitch)
+      const horizDist = cameraState.currentChaseDistance * Math.cos(cameraState.orbitPitch)
       targetCameraPos.set(
         robotPos.x - camForward.x * horizDist,
-        robotPos.y + LOOK_HEIGHT + currentChaseDistance * Math.sin(orbitPitch),
+        robotPos.y + LOOK_HEIGHT + cameraState.currentChaseDistance * Math.sin(cameraState.orbitPitch),
         robotPos.z - camForward.z * horizDist
       )
       // stesso risultato di camera.lookAt(), ma calcolato su un bersaglio
@@ -2556,23 +2570,23 @@ function animate() {
   // NO_BALL a metà strada (vedi updateShootAnimation), quindi va aggiornata
   // PRIMA del branch sotto, non dentro — altrimenti il frame del cambio
   // stato salterebbe un aggiornamento oppure ne farebbe due.
-  // shootStateTransitionTimer > 0 ANCHE con shootPhase già 'idle': il
+  // shootingState.stateTransitionTimer > 0 ANCHE con shootingState.phase già 'idle': il
   // countdown (0.35s) può superare quanto resta di release+recover — senza
   // continuare a chiamare la funzione qui, il countdown si blocca a metà e
   // NO_BALL/basketball FREE non scattano mai
-  if (basketball && (shootPhase !== 'idle' || shootStateTransitionTimer > 0)) updateShootAnimation(delta)
+  if (basketball && (shootingState.phase !== 'idle' || shootingState.stateTransitionTimer > 0)) updateShootAnimation(delta)
 
   if (basketball) {
-    // shootReleased (non solo manipulator.state === NO_BALL): lo stato vero
+    // shootingState.released (non solo manipulator.state === NO_BALL): lo stato vero
     // e proprio ora cambia con un piccolo ritardo dopo il rilascio (vedi
     // SHOOT_STATE_TRANSITION_DELAY in updateShootAnimation) — il volo fisico
     // della palla deve però partire SUBITO al rilascio, non aspettare
     if (pickupPhase === 'active') {
       updatePickup(delta)
-    } else if (manipulator.state === RobotState.NO_BALL || shootReleased) {
+    } else if (manipulator.state === RobotState.NO_BALL || shootingState.released) {
       updateShotFlight(delta)
       checkForPickup()
-    } else if (shootPhase === 'idle') {
+    } else if (shootingState.phase === 'idle') {
       if (manipulator.state === RobotState.HANDLING) {
         updateHandling(delta)
       } else {
@@ -2596,12 +2610,12 @@ function animate() {
 
   // preview di traiettoria: solo mentre si mira davvero (HANDLING, nessuna
   // animazione di tiro già in corso, palla non ancora rilasciata). Serve
-  // anche !shootReleased: lo stato passa a NO_BALL con un piccolo ritardo
+  // anche !shootingState.released: lo stato passa a NO_BALL con un piccolo ritardo
   // dopo il rilascio vero (SHOOT_STATE_TRANSITION_DELAY), quindi c'è una
-  // finestra in cui manipulator.state è ANCORA HANDLING e shootPhase è GIÀ
+  // finestra in cui manipulator.state è ANCORA HANDLING e shootingState.phase è GIÀ
   // tornato 'idle' (fine di 'recover') — senza questo controllo la linea si
   // riattaccava per un istante alla palla già in volo/atterrata
-  const showTrajectory = basketball && manipulator.state === RobotState.HANDLING && shootPhase === 'idle' && !shootReleased
+  const showTrajectory = basketball && manipulator.state === RobotState.HANDLING && shootingState.phase === 'idle' && !shootingState.released
   if (showTrajectory) updateTrajectoryPreview()
   else hideTrajectoryPreview()
 

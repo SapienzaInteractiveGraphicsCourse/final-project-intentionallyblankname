@@ -3,10 +3,12 @@ import * as THREE from 'three'
 // collisione fisica col ferro stesso: il toro giace nel piano XZ — raggio
 // principale/tubo derivati dagli stessi accessor GLTF di 'Torus_ring_0'/
 // 'Torus_2_ring_0' (bounding box world ±43.75 in XZ, ±3.75 in Y attorno al
-// centro). Esportate (non solo interne alla classe): servono anche fuori,
-// per il cono d'assistenza al canestro in main.js (HOOP_ASSIST_BASE_RADIUS)
+// centro). RIM_RING_RADIUS esportata (non solo interna alla classe): serve
+// anche fuori, per il cono d'assistenza al canestro in main.js
+// (HOOP_ASSIST_BASE_RADIUS) — RIM_TUBE_RADIUS invece resta solo interna,
+// nessun altro file la importa davvero
 export const RIM_RING_RADIUS = 40
-export const RIM_TUBE_RADIUS = 4
+const RIM_TUBE_RADIUS = 4
 
 // Wrapper OOP sopra le collisioni ambientali (backboard/ferro/muri/pali/
 // panchine): possiede gli array di geometria (estratti dagli accessor del
