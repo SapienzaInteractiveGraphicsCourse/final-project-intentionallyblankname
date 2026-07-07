@@ -125,21 +125,30 @@
       font-size: 11px;
       padding: 5px 10px;
     }
-    #dash-bar-track {
-      width: 140px;
+    /* 2 cariche indipendenti (non più una barra unica): stesso spirito
+       "a blocchi" delle stat bar del Main Menu (.stat-block) — piena/verde
+       quando la carica è pronta, altrimenti riempita in proporzione a
+       quanto manca alla ricarica (le due ricaricano IN SEQUENZA, non in
+       parallelo: un solo timer alla volta) */
+    #dash-charges {
+      display: flex;
+      gap: 4px;
+      margin-top: 3px;
+    }
+    .dash-charge-block {
+      width: 68px;
       height: 8px;
       background: #222;
       border-radius: 3px;
-      margin-top: 3px;
       overflow: hidden;
     }
-    #dash-bar-fill {
+    .dash-charge-fill {
       height: 100%;
-      width: 100%;
+      width: 0%;
       background: #888;
       transition: background-color 0.15s;
     }
-    #dash-bar-fill.ready { background: #6ec26e; }
+    .dash-charge-fill.ready { background: #6ec26e; }
 
     /* Scoreboard: angoli tagliati (clip-path) + vetro smerigliato
        (backdrop-filter), stile ripreso da thehollowzone (vedi README) ma
@@ -148,6 +157,10 @@
       from { opacity: 0; transform: translateY(-12px); }
       to { opacity: 1; transform: translateY(0); }
     }
+    /* un solo pannello, due colonne affiancate (YOU/ENEMY) invece di due
+       pannelli impilati — la colonna ENEMY resta nel DOM sempre, mostrata/
+       nascosta via .hidden in base a gameMode (main.js), non un secondo
+       pannello a parte */
     #scoreboard {
       position: fixed;
       top: 16px;
@@ -158,10 +171,18 @@
       border: 1px solid var(--ui-orange-dim);
       clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
       padding: 10px 22px;
-      text-align: center;
+      display: flex;
+      gap: 24px;
       pointer-events: none;
       animation: panel-arrival 0.4s ease-out;
     }
+    /* stesso bug di specificità di #combat-panel: un ID con display:flex
+       proprio batte .hidden{display:none}, serve il composto per vincere */
+    #scoreboard.hidden { display: none; }
+    #scoreboard .score-col {
+      text-align: center;
+    }
+    #scoreboard .score-col.hidden { display: none; }
     #scoreboard .label {
       font-family: 'Oxanium', monospace;
       font-size: 11px;
@@ -186,6 +207,43 @@
       font-family: 'Space Mono', monospace;
     }
 
+    /* STEAL/BLOCK: stesso schema del dash-panel (barra cooldown + .ready),
+       due righe in un solo pill invece di impilarne due separati. Grigio/
+       opaco (.disabled) quando il robot ha la palla — le due mosse sono
+       usabili SOLO senza palla, non solo "in cooldown" */
+    #combat-panel {
+      bottom: 128px;
+      color: #fff;
+      font-size: 11px;
+      padding: 5px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    /* #combat-panel.display:flex (sopra, un ID) batte in specificità
+       .hidden{display:none} (una classe) — senza questa, .hidden non
+       nascondeva MAI il pannello (stesso bug già visto con #menu-overlay:
+       serve un selettore composto ID+classe con specificità pari o
+       superiore per vincere davvero) */
+    #combat-panel.hidden { display: none; }
+    .combat-row { display: flex; align-items: center; gap: 8px; }
+    .combat-row .combat-label { width: 68px; flex-shrink: 0; }
+    .combat-bar-track {
+      width: 100px;
+      height: 8px;
+      background: #222;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .combat-bar-fill {
+      height: 100%;
+      width: 100%;
+      background: #888;
+      transition: background-color 0.15s;
+    }
+    .combat-bar-fill.ready { background: #6ec26e; }
+    #combat-panel.disabled { opacity: 0.4; }
+
     #crosshair {
       position: fixed;
       top: 50%;
@@ -196,6 +254,58 @@
       font-size: 20px;
       pointer-events: none;
       text-shadow: 0 0 4px #000;
+    }
+
+    /* --- Loading Screen ---
+       Scouting (8 repo del corso): solo thegoblinslayers ha un vero loading
+       screen (spinner+barra+%), ma con progresso FINTO (percentuali
+       hardcoded per milestone, non tracking reale) — gli altri 7 non ne
+       hanno nessuno. Il nostro payload è minuscolo (2 soli GLTF: campo +
+       pallone, robot procedurale senza asset), quindi il progresso qui è
+       REALE (conteggio dei 2 loader.load() completati, niente inventato) e
+       lo schermo compare comunque un istante anche a caricamento
+       rapidissimo, invece di lasciare per una frazione di secondo il
+       canvas vuoto visibile attraverso il centro trasparente di
+       #menu-overlay (che sotto gira il campo — vuoto finché i GLTF non
+       sono pronti). z-index più alto del menu: sta SOPRA finché non
+       sparisce, poi si vede il main menu già attivo sotto */
+    #loading-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 20000;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      font-family: 'Oxanium', monospace;
+      transition: opacity 0.4s ease-out;
+    }
+    #loading-screen.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #loading-bar-track {
+      width: 320px;
+      height: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--ui-orange-dim);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #loading-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--ui-orange);
+      box-shadow: 0 0 10px rgba(255, 138, 30, 0.6);
+      transition: width 0.25s ease-out;
+    }
+    #loading-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: var(--ui-orange);
     }
 
     /* --- Main Menu (stile thehollowzone: font misti, clip-path, vetro
@@ -398,6 +508,12 @@
   </style>
 </head>
 <body>
+  <div id="loading-screen">
+    <div class="menu-title">MECHA-BASKETBALL</div>
+    <div id="loading-bar-track"><div id="loading-bar-fill"></div></div>
+    <div id="loading-label">CARICAMENTO...</div>
+  </div>
+
   <div id="menu-overlay">
     <div id="menu-main" class="menu-screen active">
       <div class="menu-title">MECHA-BASKETBALL</div>
@@ -411,7 +527,7 @@
       <div class="menu-title">GAMEMODES</div>
       <div class="menu-btn-list">
         <button class="menu-btn" data-gamemode="practice">PRACTICE</button>
-        <button class="menu-btn" disabled>1V1<span class="tag">IN ARRIVO</span></button>
+        <button class="menu-btn" data-gamemode="1v1">1V1</button>
         <button class="menu-btn" disabled>3V3<span class="tag">IN ARRIVO</span></button>
       </div>
       <button class="menu-back" data-goto="menu-main">← indietro</button>
@@ -486,15 +602,34 @@
   </div>
 
   <div id="hint" style="display:none">Click per entrare<br><small>WASD · Space/Shift · Mouse · P per debug · M per modalità</small></div>
-  <div id="mode-indicator" class="hud-pill">MODE: SPECTATE</div>
+  <div id="mode-indicator" class="hud-pill hidden">MODE: SPECTATE</div>
   <div id="dash-panel" class="hud-pill hidden">
     DASH
-    <div id="dash-bar-track"><div id="dash-bar-fill"></div></div>
+    <div id="dash-charges">
+      <div class="dash-charge-block"><div class="dash-charge-fill" id="dash-charge-fill-0"></div></div>
+      <div class="dash-charge-block"><div class="dash-charge-fill" id="dash-charge-fill-1"></div></div>
+    </div>
   </div>
-  <div id="controls-hint" class="hud-pill">R: recupera la palla</div>
-  <div id="scoreboard">
-    <div class="label">SCORE</div>
-    <div class="value" id="score-value">0</div>
+  <div id="controls-hint" class="hud-pill hidden">R: recupera la palla</div>
+  <div id="combat-panel" class="hud-pill hidden">
+    <div class="combat-row">
+      <span class="combat-label">STEAL (Q)</span>
+      <div class="combat-bar-track"><div id="steal-bar-fill" class="combat-bar-fill"></div></div>
+    </div>
+    <div class="combat-row">
+      <span class="combat-label">BLOCK (E)</span>
+      <div class="combat-bar-track"><div id="block-bar-fill" class="combat-bar-fill"></div></div>
+    </div>
+  </div>
+  <div id="scoreboard" class="hidden">
+    <div class="score-col">
+      <div class="label" id="score-label">YOU</div>
+      <div class="value" id="score-value">0</div>
+    </div>
+    <div class="score-col hidden" id="enemy-score-col">
+      <div class="label">ENEMY</div>
+      <div class="value" id="enemy-score-value">0</div>
+    </div>
   </div>
   <div id="crosshair" class="hidden">+</div>
   <div id="debug-panel" class="hud-panel hidden">

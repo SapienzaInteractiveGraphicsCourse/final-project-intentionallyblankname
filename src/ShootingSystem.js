@@ -107,9 +107,18 @@ export function shootingStatToAssistStrength(shootingStat) {
 
 export function initShootingSystem(ctx) {
   const {
-    manipulator, camera, collisionWorld, sfx, scene,
+    manipulator, collisionWorld, sfx, scene,
     shootingState, shootTuning, cameraState, dribbleState, handlingState,
-    computeAimPitchOffset, getCrosshairHeight, getBallRadius,
+    computeAimPitchOffset, getShotDirection, getBallRadius,
+    scoreElementId = 'score-value',
+    // funzione (non un valore fisso): in PRACTICE non c'è squadra avversaria
+    // da rispettare, si può segnare in uno qualunque dei due ferri; in 1V1
+    // ogni robot ha il SUO canestro (Team → hoop index) — letta ogni volta
+    // invece che congelata alla creazione perché gameMode può ancora non
+    // essere deciso quando initShootingSystem viene chiamato (al caricamento
+    // pagina, prima di qualunque scelta nel menu). null/undefined = nessuna
+    // restrizione (comportamento PRACTICE)
+    getTargetHoopIndex = () => null,
   } = ctx
   // getBasketball NON destrutturato: è una funzione, non un valore semplice
   // (main.js assegna basketball in modo asincrono al caricamento del GLTF) —
@@ -119,20 +128,15 @@ export function initShootingSystem(ctx) {
   // un accessor verrebbe valutato subito dallo spread, congelando il
   // risultato — una funzione sopravvive perché lo spread copia il
   // riferimento alla funzione, non il suo risultato
+  //
+  // getShotDirection E computeAimPitchOffset arrivano DA FUORI (non più
+  // costruite qui dentro): per il giocatore sono basate su crosshair/camera
+  // (main.js), per il nemico sull'AI (direzione verso il canestro bersaglio,
+  // src/EnemyAI.js) — ShootingSystem non deve sapere quale dei due sta
+  // guidando l'istanza corrente, gli basta una funzione che gli dia una
+  // direzione
 
   const shotFloorBounceSpeed = BALL_BOUNCE_SPEED * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
-
-  const shootRaycaster = new THREE.Raycaster()
-  const crosshairNDC = new THREE.Vector2()
-  // Direzione: raycast dalla camera attraverso il PIXEL del crosshair (non
-  // il centro schermo) — in HANDLING la camera ha un orientamento libero
-  // vero (quaternion, non lookAt), quindi quel raggio è esattamente dove
-  // il giocatore sta mirando
-  function getShotDirection(out) {
-    crosshairNDC.set(0, (2 * getCrosshairHeight()) / window.innerHeight)
-    shootRaycaster.setFromCamera(crosshairNDC, camera)
-    return out.copy(shootRaycaster.ray.direction)
-  }
 
   function getEffectiveShotSpeed(worldPosition) {
     return isInsideThreePointArc(worldPosition, collisionWorld.hoops) ? shootTuning.shotSpeed * THREE_POINT_SPEED_REDUCTION : shootTuning.shotSpeed
@@ -142,7 +146,10 @@ export function initShootingSystem(ctx) {
   // fuori (shootingState.wasInsideArc, catturato al rilascio — non dove si
   // trova la palla quando entra), canestro in uno qualunque dei due ferri vale
   let score = 0
-  const scoreValueEl = document.getElementById('score-value')
+  // scoreElementId: 'score-value' (default, il giocatore) o
+  // 'enemy-score-value' per l'istanza del nemico — due contatori distinti
+  // per il vero punteggio 1v1, non più uno condiviso
+  const scoreValueEl = document.getElementById(scoreElementId)
   function addScore(points) {
     score += points
     scoreValueEl.textContent = String(score)
@@ -155,13 +162,23 @@ export function initShootingSystem(ctx) {
     scoreValueEl.textContent = String(score)
   }
 
+  // niente array temporaneo (era `[collisionWorld.hoops[i]]` costruito ad
+  // ogni chiamata): questa gira a SHOT_PHYSICS_SUBSTEP_DT (240Hz) per
+  // l'intera durata di ogni tiro, un'allocazione per passo era puro spreco
   function checkHoopScore(previousPos, position) {
-    for (const hoop of collisionWorld.hoops) {
-      if (isHoopCrossing(previousPos, position, hoop)) {
-        console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
-        addScore(shootingState.wasInsideArc ? 2 : 3)
-        sfx.playScore()
-      }
+    const targetHoopIndex = getTargetHoopIndex()
+    if (targetHoopIndex == null) {
+      for (const hoop of collisionWorld.hoops) checkSingleHoopScore(previousPos, position, hoop)
+    } else {
+      checkSingleHoopScore(previousPos, position, collisionWorld.hoops[targetHoopIndex])
+    }
+  }
+
+  function checkSingleHoopScore(previousPos, position, hoop) {
+    if (isHoopCrossing(previousPos, position, hoop)) {
+      console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
+      addScore(shootingState.wasInsideArc ? 2 : 3)
+      sfx.playScore()
     }
   }
 
@@ -199,8 +216,10 @@ export function initShootingSystem(ctx) {
     checkHoopScore(scratchPreviousShotPos, ball.position)
     // solo nel volo reale (non nella preview, che condivide la stessa
     // funzione ma non deve mai suonare mentre si sta solo mirando)
-    if (collisionWorld.resolve(ball.position, shotVelocity, dt, shotCollisionCooldowns, ballRadius)) sfx.playBounce()
+    const hitVisible = collisionWorld.resolve(ball.position, shotVelocity, dt, shotCollisionCooldowns, ballRadius)
+    if (hitVisible) sfx.playBounce()
 
+    let hitFloor = false
     if (ball.position.y <= ballRadius) {
       ball.position.y = ballRadius
       sfx.playBounce()
@@ -212,6 +231,19 @@ export function initShootingSystem(ctx) {
       // sempre (solo Y viene mai toccata altrimenti)
       shotVelocity.x *= FLOOR_HORIZONTAL_DAMPING
       shotVelocity.z *= FLOOR_HORIZONTAL_DAMPING
+      hitFloor = true
+    }
+
+    // SOLO il primo tocco del PAVIMENTO (non backboard/ferro/muro/palo/
+    // panchina): un tiro che colpisce il ferro/backboard — canestro fatto
+    // o no — resta FREE_SHOT (bloccabile con BLOCK, non raccoglibile da
+    // nessuno dei due con pickup/HANDLING) finché non tocca davvero
+    // terra almeno una volta. hasBounced garantisce che scatti una volta
+    // sola per tiro (senza, ogni rimbalzo successivo sul pavimento
+    // rientrerebbe qui inutilmente)
+    if (!shootingState.hasBounced && hitFloor) {
+      shootingState.hasBounced = true
+      ball.setState(BallState.FREE)
     }
   }
   function updateShotFlight(delta) {
@@ -246,7 +278,10 @@ export function initShootingSystem(ctx) {
       shootingState.stateTransitionTimer -= delta
       if (shootingState.stateTransitionTimer <= 0) {
         manipulator.setState(RobotState.NO_BALL)
-        ctx.getBasketball().setState(BallState.FREE)
+        // NON tocca più BallState qui: la palla è già passata a FREE_SHOT
+        // al momento del rilascio fisico (vedi sotto) — questo timer
+        // riguarda solo ROBOT/camera, non il ciclo di vita della palla
+        // (FREE_SHOT → FREE gestito da stepShotFlight al primo urto)
         // stessa sicurezza di releaseBallHandling(): il clamp esteso di
         // HANDLING è valido solo lì — appena si esce la camera passa alla
         // formula normale, che con un pitch estremo manda la camera sotto
@@ -286,6 +321,15 @@ export function initShootingSystem(ctx) {
         getShotDirection(shotVelocity).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
         shootingState.wasInsideArc = isInsideThreePointArc(manipulator.root.position, collisionWorld.hoops)
         shootingState.released = true
+        // FREE_SHOT (non FREE diretto): in volo, non ancora "sporca" — solo
+        // BLOCK la intercetta da qui fino al primo urto, il pickup
+        // automatico resta cieco a questo stato (vedi checkForPickup in
+        // BallPossession.js e il primo urto in stepShotFlight più sotto)
+        ctx.getBasketball().setState(BallState.FREE_SHOT)
+        // nessuno la possiede più durante il volo — sarà il prossimo
+        // pickup/steal a riassegnarla (ball.team resta quello di chi ha
+        // appena tirato: setOwner(null) lo preserva, non lo azzera)
+        ctx.getBasketball().setOwner(null)
         sfx.playShoot()
         // NON manipulator.setState(NO_BALL) qui: farlo nello STESSO istante
         // in cui parte il volo sgancia subito la camera dalla vista libera

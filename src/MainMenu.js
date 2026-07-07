@@ -29,14 +29,25 @@ import { BallState } from './Basketball.js'
 // congelerebbe il risultato — vedi il commento su gameContext in main.js)
 export function initMainMenu(ctx) {
   const {
-    menuOverlayEl, hint, dashPanel, crosshair, modeIndicator,
+    menuOverlayEl, hint, dashPanel, combatPanel, crosshair, modeIndicator,
+    scoreboardEl, enemyScoreboardEl, controlsHintEl,
     menuState, controls,
-    applyTimeOfDayPreset, resetScore,
+    applyTimeOfDayPreset, resetScore, resetEnemyScore,
     renderer, scene, camera, sun, ssaoPass, sfx,
-    manipulator, movementState, cameraState, dashState, shootingState, handlingState, pickupState,
+    manipulator, movementState, cameraState, dashState, dashMaxCharges, shootingState, handlingState, pickupState,
+    stealState, blockState,
     shotVelocity, ORBIT_PITCH_REST,
     resetDribbleState, clearAllCollisionCooldowns, hideTrajectoryPreview,
+    enemyManipulator, enemyShootingState, enemyHandlingState, enemyPickupState,
+    enemyStealState, enemyBlockState, enemyShotVelocity,
+    enemyResetDribbleState, enemyClearAllCollisionCooldowns, resetEnemyWheelsAngle,
   } = ctx
+
+  // "lati" del campo: canestri reali a X≈±1080 (CollisionWorld.js) — a metà
+  // strada verso il centro, non alla linea di fondo: una nuova partita
+  // parte a distanza di palleggio, non già sotto canestro
+  const PLAYER_SPAWN_X = -300
+  const ENEMY_SPAWN_X = 300
 
   // BACK TO MAIN MENU deve riportare a una partita davvero pulita, non solo
   // azzerare il punteggio — altrimenti una nuova PRACTICE iniziava con 0
@@ -46,7 +57,7 @@ export function initMainMenu(ctx) {
   // si ricambiano rifacendo il flusso se serve) alla stessa condizione di
   // un ingresso a freddo in Play
   function resetGameplayState() {
-    manipulator.root.position.set(0, 0, 0)
+    manipulator.root.position.set(PLAYER_SPAWN_X, 0, 0)
     movementState.facing = 0
     movementState.wheelsAngle = -Math.PI / 2 // combacia col valore iniziale del `let` a modulo originale
     manipulator.controls.setWheelsYaw(movementState.wheelsAngle)
@@ -54,17 +65,26 @@ export function initMainMenu(ctx) {
     cameraState.orbitPitch = ORBIT_PITCH_REST
 
     manipulator.setState(RobotState.DRIBBLE)
+    // palla riassegnata al giocatore: la sua posizione segue comunque
+    // sempre la paletta del possessore (vedi stepDribble), "al centro"
+    // vero conterebbe solo per una palla senza owner — qui basta che
+    // riparta da chi la possiede, non da dove l'ultima partita l'ha lasciata
     const ball = ctx.getBasketball()
-    if (ball) ball.setState(BallState.HANDLED)
+    if (ball) {
+      ball.setState(BallState.HANDLED)
+      ball.setOwner(manipulator)
+    }
     resetDribbleState()
     clearAllCollisionCooldowns()
 
-    dashState.cooldown = 0
+    dashState.charges = dashMaxCharges
+    dashState.rechargeTimer = 0
     dashState.timeRemaining = 0
 
     shootingState.phase = 'idle'
     shootingState.phaseT = 0
     shootingState.released = false
+    shootingState.hasBounced = false
     shootingState.stateTransitionTimer = 0
     shootingState.wasInsideArc = false
     shotVelocity.set(0, 0, 0)
@@ -76,6 +96,55 @@ export function initMainMenu(ctx) {
 
     pickupState.phase = 'idle'
     pickupState.phaseT = 0
+
+    stealState.phase = 'idle'
+    stealState.phaseT = 0
+    stealState.cooldown = 0
+    stealState.contactMade = false
+    blockState.phase = 'idle'
+    blockState.phaseT = 0
+    blockState.cooldown = 0
+    manipulator.controls.setDribbleOffsets(0, 0)
+
+    // nemico: stesso identico reset, dal proprio lato di campo — altrimenti
+    // BACK TO MAIN MENU → PRACTICE riparte con l'IA a metà tiro/palleggio
+    // di prima, o dalla parte sbagliata di campo
+    enemyManipulator.root.position.set(ENEMY_SPAWN_X, 0, 0)
+    enemyManipulator.controls.setWheelsYaw(-Math.PI / 2)
+    // risincronizza la copia locale di EnemyAI.js (mantenuta per
+    // interpolare fluidamente, non la sorgente di verità) — senza,
+    // restava al valore di prima del reset e il prossimo lerpAngle
+    // faceva scivolare visibilmente le ruote da lì invece di ripartire pulite
+    resetEnemyWheelsAngle(-Math.PI / 2)
+    enemyManipulator.controls.setAimYaw(-Math.PI / 2)
+    enemyManipulator.setState(RobotState.NO_BALL)
+    enemyResetDribbleState()
+    enemyClearAllCollisionCooldowns()
+
+    enemyShootingState.phase = 'idle'
+    enemyShootingState.phaseT = 0
+    enemyShootingState.released = false
+    enemyShootingState.hasBounced = false
+    enemyShootingState.stateTransitionTimer = 0
+    enemyShootingState.wasInsideArc = false
+    enemyShotVelocity.set(0, 0, 0)
+    enemyManipulator.controls.setShootTilt(0)
+
+    enemyHandlingState.grip = 0
+    enemyHandlingState.tiltOffset = 0
+    enemyManipulator.controls.setGrip(0)
+
+    enemyPickupState.phase = 'idle'
+    enemyPickupState.phaseT = 0
+
+    enemyStealState.phase = 'idle'
+    enemyStealState.phaseT = 0
+    enemyStealState.cooldown = 0
+    enemyStealState.contactMade = false
+    enemyBlockState.phase = 'idle'
+    enemyBlockState.phaseT = 0
+    enemyBlockState.cooldown = 0
+    enemyManipulator.controls.setDribbleOffsets(0, 0)
 
     hideTrajectoryPreview()
   }
@@ -125,7 +194,20 @@ export function initMainMenu(ctx) {
   })
   document.getElementById('menu-back-to-main-btn').addEventListener('click', () => {
     resetScore()
+    resetEnemyScore()
     resetGameplayState()
+    // l'HUD di gioco deve tornare invisibile finché non si preme di nuovo
+    // START — altrimenti restava sullo schermo (visibile attraverso il
+    // centro trasparente di #menu-overlay) anche mentre si è tornati al
+    // menu principale
+    dashPanel.classList.add('hidden')
+    combatPanel.classList.add('hidden')
+    crosshair.classList.add('hidden')
+    scoreboardEl.classList.add('hidden')
+    enemyScoreboardEl.classList.add('hidden')
+    controlsHintEl.classList.add('hidden')
+    modeIndicator.classList.add('hidden')
+    enemyManipulator.root.visible = false
     showMenuScreen('menu-main')
   })
 
@@ -143,6 +225,14 @@ export function initMainMenu(ctx) {
     menuState.mode = 'play'
     modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
     controls.lock()
+    // PRACTICE è solo: il nemico resta nascosto (la sua AI/dispatch sono
+    // già disattivati altrove in base a gameMode, questo è solo l'aspetto
+    // visivo — senza, il modello procedurale restava lì fermo e visibile
+    // anche in una partita "da soli")
+    const isOneVOne = menuState.gameMode === GameMode.ONE_V_ONE
+    enemyManipulator.root.visible = isOneVOne
+    combatPanel.classList.toggle('hidden', !isOneVOne)
+    enemyScoreboardEl.classList.toggle('hidden', !isOneVOne)
   }
   // funzione a parte (non solo dentro il listener) perché serve anche da
   // altre varianti (es. altri punti d'ingresso alla pausa)
@@ -151,12 +241,12 @@ export function initMainMenu(ctx) {
   }
   document.getElementById('menu-back-to-game-btn').addEventListener('click', resumeGame)
 
-  // solo PRACTICE ha data-gamemode (1V1/3V3 sono bottoni disabled senza
-  // l'attributo, questo querySelectorAll non li include nemmeno) — nessun
-  // ramo per "quale gamemode" serve finché ce n'è solo una vera
+  // PRACTICE e 1V1 hanno data-gamemode (3V3 resta un bottone disabled
+  // senza l'attributo, questo querySelectorAll non lo include nemmeno)
+  const gameModeMap = { practice: GameMode.PRACTICE, '1v1': GameMode.ONE_V_ONE }
   document.querySelectorAll('[data-gamemode]').forEach(el => {
     el.addEventListener('click', () => {
-      menuState.gameMode = GameMode.PRACTICE
+      menuState.gameMode = gameModeMap[el.dataset.gamemode]
       showMenuScreen('menu-robot')
     })
   })
@@ -183,11 +273,14 @@ export function initMainMenu(ctx) {
   })
 
   document.getElementById('menu-start-btn').addEventListener('click', () => {
-    // dashPanel/crosshair: nascosti di default nell'HTML finché non si entra
-    // MAI in play — smostrati una tantum qui, la pausa/ripresa successive
-    // (enterPlayMode/resumeGame) non li toccano più, restano già sbloccati
+    // dashPanel/crosshair/scoreboard/controls-hint: nascosti di default
+    // nell'HTML finché non si entra MAI in play — smostrati qui (combatPanel
+    // NON qui: dipende da PRACTICE/1V1, lo decide enterPlayMode sotto)
     dashPanel.classList.remove('hidden')
     crosshair.classList.remove('hidden')
+    scoreboardEl.classList.remove('hidden')
+    controlsHintEl.classList.remove('hidden')
+    modeIndicator.classList.remove('hidden')
     enterPlayMode()
   })
 

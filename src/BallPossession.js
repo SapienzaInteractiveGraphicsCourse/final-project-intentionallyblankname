@@ -15,6 +15,18 @@ import { BALL_GRAVITY, BALL_BOUNCE_SPEED, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } fro
 // System (updateShootAnimation) — condiviso invece di duplicato, un solo
 // punto di verità su "dove sta la paletta in questo istante".
 export const paddleWorldPos = new THREE.Vector3()
+
+// updateWorldMatrix(true,...) + getWorldPosition: pattern ripetuto ovunque
+// serva la posizione MONDO reale di un nodo della gerarchia del robot in
+// questo stesso frame (matrixWorld si aggiorna di norma solo durante il
+// render, quindi senza sarebbe in ritardo di un frame) — object3D e out
+// espliciti (non un accessor sul robot) perché serve sia per la paletta
+// sia per ballRestPoint sia, in CombatMoves.js, di nuovo per la paletta ma
+// su un'istanza robot diversa (nemico) con un proprio scratch
+export function getObjectWorldPosition(object3D, out) {
+  object3D.updateWorldMatrix(true, false)
+  return object3D.getWorldPosition(out)
+}
 // bounding box VERA del robot (non la distanza dal solo centro/root — il
 // corpo è largo e basso, non uno sferoide, un raggio da un punto solo non
 // rappresenta bene quando la palla è davvero "a portata") — ricalcolata
@@ -49,9 +61,37 @@ export function dribbleAmplitudesRad(dribbleTuning) {
 // da updateHandling/updatePickup qui e da updateShootAnimation in
 // ShootingSystem.js, invece di ripetere le stesse 3 righe in tre punti
 export function snapBallToRestPoint(manipulator, basketball) {
-  manipulator.ballRestPoint.updateWorldMatrix(true, false)
-  manipulator.ballRestPoint.getWorldPosition(paddleWorldPos)
+  getObjectWorldPosition(manipulator.ballRestPoint, paddleWorldPos)
   basketball.position.copy(paddleWorldPos)
+}
+
+// riporta un robot a "possiede la palla, in palleggio pulito, niente
+// residuo di HANDLING/tiro/mossa in corso" — stessa sequenza di 6 righe
+// che finiva ritypata a mano in updatePickup qui sotto E in
+// CombatMoves.js (fine di un furto riuscito): shootingState.released e
+// handlingState.grip/tiltOffset sono gli esatti campi che, se lasciati
+// "sporchi" da un giro precedente (HANDLING interrotto da un furto, un
+// tiro mai ripreso di persona), causavano rispettivamente la palla che
+// "cadeva"/spariva invece di palleggiare, e la paletta che restava storta
+export function resetToNeutralPossession(manipulator, { dribbleState, handlingState, shootingState }, resetDribbleState) {
+  dribbleState.armEase = 0
+  manipulator.setState(RobotState.DRIBBLE)
+  resetDribbleState()
+  shootingState.released = false
+  handlingState.grip = 0
+  handlingState.tiltOffset = 0
+  manipulator.controls.setGrip(0)
+  // mancava: azzerava la VARIABILE tracciata (tiltOffset) ma mai il JOINT
+  // vero — stepDribble non tocca MAI il tilt (solo elbow/link1), quindi la
+  // paletta restava storta al valore lasciato da un HANDLING precedente
+  // per tutto il palleggio successivo, finché non si rientrava in HANDLING
+  // (che rifà setShootTilt da capo, "aggiustandola" dopo un istante)
+  manipulator.controls.setShootTilt(0)
+  // difensivo, stesso principio: elbow/link1 dovrebbero già essere a 0
+  // (STEAL/BLOCK/pickup finiscono la propria animazione esattamente lì
+  // prima di arrivare qui), ma esplicito invece di assunto — stesso
+  // pattern già usato da MainMenu.js per il reset completo
+  manipulator.controls.setDribbleOffsets(0, 0)
 }
 
 // riporta cameraState.orbitPitch dentro il range normale (fuori da
@@ -68,6 +108,10 @@ export function snapBallToRestPoint(manipulator, basketball) {
 export function clampOrbitPitchToNormalRange(cameraState) {
   cameraState.orbitPitch = THREE.MathUtils.clamp(cameraState.orbitPitch, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
 }
+
+// rete di sicurezza per 'drop' (vedi commento dentro stepDribble): una
+// vera caduta è sempre molto più breve di questo
+const DRIBBLE_DROP_SAFETY_TIMEOUT = 2
 
 // Simulazione del palleggio, macchina a stati push/drop/rise — parametrizzata
 // su un robot/bersaglio-palla/oggetto-stato qualunque (non solo i
@@ -101,11 +145,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
   // sarebbe in ritardo di un frame rispetto alla posa appena decisa sopra
   robot.controls.setDribbleOffsets(state.armEase * elbowAmplitude, state.armEase * link1Amplitude)
 
-  // updateWorldMatrix forza il ricalcolo subito (matrixWorld si aggiorna
-  // di norma solo durante il render, quindi senza sarebbe in ritardo di
-  // un frame rispetto alla posa appena applicata sopra)
-  robot.paddle.updateWorldMatrix(true, false)
-  robot.paddle.getWorldPosition(paddleWorldPos)
+  getObjectWorldPosition(robot.paddle, paddleWorldPos)
   // il punto di tracking (centro geometrico della paletta) non è dove
   // dovrebbe stare la palla a occhio: 3 offset (Forward/Side/Down,
   // tarabili da debug → Basketball → Ball Offset) spostano quel punto.
@@ -155,6 +195,23 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     // sempre zero, ad ogni singolo ciclo (deterministico, non casuale)
     if (state.armEase >= 1 - 1e-6) { state.phase = 'drop'; state.phaseT = 0 }
   } else if (state.phase === 'drop') {
+    // rete di sicurezza: una vera caduta sotto questa gravità, da qualunque
+    // altezza plausibile del braccio, tocca terra ben sotto 1s — se 'drop'
+    // dura anomalmente a lungo (es. basketball.position è stata spostata
+    // altrove nel frattempo da un pickup/steal/block concorrente, mai
+    // scendendo sotto ballRadius per davvero), armEase resta congelato a 1
+    // per sempre invece di limitarsi a "un attimo in più": la paletta
+    // sembra bloccata aperta a tempo indefinito. Oltre questa soglia si
+    // forza un rientro pulito invece di aspettare una condizione che
+    // potrebbe non verificarsi mai
+    if (state.phaseT > DRIBBLE_DROP_SAFETY_TIMEOUT) {
+      state.phase = 'push'
+      state.phaseT = 0
+      state.armEase = 0
+      state.ballVelocityY = 0
+      state.previousPushPaddleY = null
+      return
+    }
     state.ballVelocityY -= BALL_GRAVITY * dt
     let ballY = ballPositionTarget.y + state.ballVelocityY * dt
     if (ballY <= ballRadius) {
@@ -217,6 +274,11 @@ export function initBallPossession(ctx) {
     manipulator.controls.setGrip(0)
     handlingState.tiltOffset = 0
     manipulator.controls.setShootTilt(0)
+    // HANDLING lascia elbow/link1 a un'ampiezza qualunque (dribbleState.
+    // armEase interpolato verso handlingTuning.ease, quasi mai 0) — resetDribbleState()
+    // azzera la VARIABILE, ma il joint vero resterebbe a quella posa per un
+    // frame intero finché il prossimo stepDribble non applica armEase=0
+    manipulator.controls.setDribbleOffsets(0, 0)
   }
 
   // Palleggio: unica funzione chiamata a passo fisso (vedi accumulator in
@@ -277,8 +339,28 @@ export function initBallPossession(ctx) {
     const ball = ctx.getBasketball()
     if (pickupState.phase !== 'idle' || !ball || ball.state !== BallState.FREE) return
     if (manipulator.state !== RobotState.NO_BALL) return
+    // STEAL/BLOCK propri devono essere finiti (idle), non solo iniziati —
+    // altrimenti un pickup poteva partire mentre il resolve di un BLOCK
+    // stava ancora rientrando: due animazioni sugli stessi joint
+    // (setDribbleOffsets) nello stesso frame, la paletta finiva "aperta"
+    // come nella posa di block invece di interpolare verso il dribble
+    if (ctx.stealState && ctx.stealState.phase !== 'idle') return
+    if (ctx.blockState && ctx.blockState.phase !== 'idle') return
     if (manipulator.root.position.distanceToSquared(ball.position) > pickupCoarseRadius * pickupCoarseRadius) return
     if (!isRobotTouchingBall(manipulator, ball, getBallRadius(), pickupMargin)) return
+    // possesso ATOMICO qui, non a fine animazione (t>=1 in updatePickup):
+    // in 1v1 due robot possono passare entrambi questo stesso controllo
+    // nello STESSO frame (entrambi vedono ancora ball.state===FREE finché
+    // nessuno dei due l'ha rivendicata) — chi arriva qui per primo deve
+    // segnare SUBITO la palla come non più libera, così il secondo
+    // checkForPickup (giocatore o nemico, eseguito dopo nello stesso
+    // frame) la trova già presa e si ferma da solo. Senza questo, due
+    // pickup partivano insieme e per 0.3s si contendevano la stessa
+    // basketball.position ogni frame (snapBallToRestPoint di updatePickup
+    // gira per ENTRAMBI) — la palla sembrava vibrare a terra invece di
+    // finire pulita in una mano sola
+    ball.setState(BallState.HANDLED)
+    ball.setOwner(manipulator)
     pickupState.phase = 'active'
     pickupState.phaseT = 0
   }
@@ -293,6 +375,23 @@ export function initBallPossession(ctx) {
   // rimasta ad ampiezza piena (1.0) fino all'ultimo frame, con uno scatto a
   // 0 nel momento esatto dell'aggancio invece di un passaggio smooth
   function updatePickup(delta) {
+    const ball = ctx.getBasketball()
+    // durante questi 0.3s manipulator.state resta NO_BALL (passa a DRIBBLE
+    // solo a fine animazione, sotto) mentre ball.owner/state sono GIÀ
+    // "presi" (claim atomico in checkForPickup) — una finestra in cui uno
+    // STEAL avversario può rubare la palla appena reclamata (controlla solo
+    // ball.owner/state, non pickupState). Se succede, abortire pulito qui
+    // invece di continuare ad agganciarla alla PROPRIA paletta e poi
+    // passare comunque a DRIBBLE a fine animazione senza possederla più —
+    // altrimenti due robot si contendevano la posizione della palla ogni
+    // frame, sembrava "rotolare via" pur risultando tecnicamente posseduta
+    if (!ball || ball.owner !== manipulator) {
+      pickupState.phase = 'idle'
+      dribbleState.armEase = 0
+      manipulator.controls.setDribbleOffsets(0, 0)
+      return
+    }
+
     pickupState.phaseT += delta
     const t = Math.min(pickupState.phaseT / pickupDuration, 1)
     const dipT = Math.sin(t * Math.PI) // 0 -> 1 -> 0, non 0 -> 1
@@ -305,18 +404,17 @@ export function initBallPossession(ctx) {
     // usato dal palleggio automatico, sta sulla superficie della paletta e
     // causava compenetrazione visiva — ballRestPoint è il punto corretto già
     // usato da HANDLING/tiro, spostato fuori lungo la convergenza della V
-    snapBallToRestPoint(manipulator, ctx.getBasketball())
+    snapBallToRestPoint(manipulator, ball)
 
     if (t >= 1) {
       pickupState.phase = 'idle'
-      ctx.getBasketball().setState(BallState.HANDLED)
-      manipulator.setState(RobotState.DRIBBLE)
-      resetDribbleState()
-      // senza questo resta true dal tiro che ha liberato la palla: animate()
-      // instrada su updateShotFlight finché manipulator.state===NO_BALL O
-      // shootingState.released — con questo flag ancora true il palleggio
-      // non riparte mai anche se lo stato è già tornato DRIBBLE
-      shootingState.released = false
+      // BallState/owner già impostati in checkForPickup (claim atomico,
+      // non qui a fine animazione — vedi commento lì), niente da rifare.
+      // resetToNeutralPossession chiude anche shootingState.released
+      // (altrimenti resta true dal tiro che ha liberato la palla: animate()
+      // instraderebbe su updateShotFlight invece di far ripartire il
+      // palleggio) e grip/tilt (difensivo, HANDLING-specifici)
+      resetToNeutralPossession(manipulator, { dribbleState, handlingState, shootingState }, resetDribbleState)
     }
   }
 

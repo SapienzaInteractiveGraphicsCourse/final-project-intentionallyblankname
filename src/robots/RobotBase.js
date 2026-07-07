@@ -26,10 +26,11 @@ export const RobotState = Object.freeze({
 })
 
 export class RobotBase {
-  constructor({ factory, stats, type }) {
+  constructor({ factory, stats, type, team }) {
     Object.assign(this, factory())
     this.stats = stats
     this.type = type
+    this.team = team // Team.A/Team.B (src/Team.js) — chi possiede la palla si legge da qui via Basketball.owner.team
     this.state = RobotState.DRIBBLE
   }
 
@@ -37,12 +38,19 @@ export class RobotBase {
     this.state = state
   }
 
-  // velocità reale (unità mondo/s) derivata dallo stat SPEED — usata sia
-  // dal movimento normale sia, moltiplicata da fuori, dal dash. Dimezzata
-  // in HANDLING: si cammina più lenti mentre si tiene la palla ferma in mano
+  // velocità di BASE (unità mondo/s), sempre piena — usata dal dash: uno
+  // scatto resta lo stesso burst indipendentemente da HANDLING, non va
+  // rallentato dalla stessa riduzione del movimento normale
+  get baseSpeed() {
+    return speedStatToUnitsPerSecond(this.stats.speed)
+  }
+
+  // velocità reale (unità mondo/s) derivata dallo stat SPEED — usata dal
+  // movimento normale. Ridotta al 75% in HANDLING: si cammina un po' più
+  // lenti mentre si tiene la palla ferma in mano, non dimezzata (troppo
+  // penalizzante mentre si mira)
   get speed() {
-    const base = speedStatToUnitsPerSecond(this.stats.speed)
-    return this.state === RobotState.HANDLING ? base * 0.5 : base
+    return this.state === RobotState.HANDLING ? this.baseSpeed * 0.75 : this.baseSpeed
   }
 
   // movimento condiviso da tutte le classi: la velocità viene dallo stat,

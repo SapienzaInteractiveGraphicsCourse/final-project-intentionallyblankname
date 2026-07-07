@@ -1,0 +1,381 @@
+import * as THREE from 'three'
+import { RobotState } from './robots/RobotBase.js'
+import { BallState } from './Basketball.js'
+import { dribbleAmplitudesRad, snapBallToRestPoint, getObjectWorldPosition, resetToNeutralPossession } from './BallPossession.js'
+
+// STEAL e BLOCK: entrambe animazioni di "allungo" (flette link1, estende
+// elbow) via manipulator.controls.setDribbleOffsets — stessa API già usata
+// da dribble/handling/shoot, nessuna nuova primitiva sul robot. Condividono
+// abbastanza struttura (reach → contatto → resolve → cooldown, usabili
+// SOLO in RobotState.NO_BALL) da stare in un solo modulo invece di due
+// quasi identici.
+//
+// STEAL: successo se il ROBOT stealer entra nella bounding box
+// dell'avversario (espansa di un margine, non un punto preciso sulla
+// palla — "beccare una box del robot", molto più permissivo di un
+// contatto paletta-vs-palla) mentre la palla è HANDLED dall'AVVERSARIO —
+// possesso trasferito, l'avversario derubato passa a NO_BALL (senza
+// questo resterebbe in DRIBBLE con la palla ormai altrui, i due dispatch
+// in main.js finirebbero per contendersi la stessa basketball.position
+// ogni frame). Animazione: non un allungo statico, un vero SWEEP — la base
+// (R1) spazza da un lato all'altro mentre link1/elbow restano tesi.
+// BLOCK: successo se il contatto avviene mentre la palla è FREE_SHOT (tiro
+// in volo, prima del primo rimbalzo) — nessun cambio di owner, il tiro
+// viene solo deviato: la palla torna FREE (sganciata dal volo, "sporca",
+// riprendibile subito), niente canestro. L'arm (yaw base) punta dritto
+// verso la palla per tutta la reach, non una posa fissa.
+// esportate (non solo interne): main.js le usa per calcolare la percentuale
+// di riempimento delle barre HUD (stesso schema di DASH_COOLDOWN_TIME)
+// STEAL raddoppiato (5 -> 10s): a 5s i due robot si rubavano la palla a
+// vicenda quasi in loop continuo, senza mai una vera finestra per tirare
+export const STEAL_COOLDOWN = 10
+export const BLOCK_COOLDOWN = 5
+// appena derubati, niente steal-back immediato per un po' — senza,
+// chi non aveva mai usato STEAL prima (cooldown ancora a 0) poteva
+// rubarla indietro nello stesso istante
+const VICTIM_STEAL_LOCKOUT = 2
+const STEAL_REACH_DURATION = 0.4
+const BLOCK_REACH_DURATION = 0.375 // rallentata del 20% (velocità all'80% di quella originale, 0.3s)
+// tempo di rientro della posa (allungo → neutro) dopo successo O fallimento
+// — stesso principio del "tuffo" del pickup: mai uno scatto secco
+const RESOLVE_DURATION = 0.2
+// margine oltre la vera bounding box dell'avversario entro cui STEAL
+// scatta — un bersaglio "box", non un punto preciso sulla palla
+const STEAL_BOX_MARGIN = 90
+// raggio di contatto paletta-palla per BLOCK (bersaglio in volo, un po'
+// permissivo — tiro veloce, non c'è tempo di essere precisi). Ridotto da
+// 100: a quel raggio si veniva bloccati anche da distanze visivamente
+// assurde, molto oltre la reale portata del braccio
+const BLOCK_CONTACT_RADIUS = 55
+const STEAL_ELBOW_DEG = -70
+const STEAL_LINK1_DEG = 50
+const STEAL_SWEEP_AMPLITUDE_DEG = 50 // ampiezza dello spazzolamento base, da -X a +X gradi attorno alla direzione attuale
+// verso l'ALTO, non in avanti: link1 vicino a 0 (resta verticale, niente
+// tilt in avanti — quel +70 precedente inclinava tutto il braccio avanti)
+// e gomito molto disteso (quasi dritto) per allungarsi sopra la testa
+const BLOCK_ELBOW_DEG = -65
+const BLOCK_LINK1_DEG = 5
+// convertiti una sola volta (non ad ogni frame di reach) — stesso
+// principio già seguito altrove nel progetto per le conversioni statiche
+const STEAL_ELBOW_TARGET = THREE.MathUtils.degToRad(STEAL_ELBOW_DEG)
+const STEAL_LINK1_TARGET = THREE.MathUtils.degToRad(STEAL_LINK1_DEG)
+const STEAL_SWEEP_AMPLITUDE = THREE.MathUtils.degToRad(STEAL_SWEEP_AMPLITUDE_DEG)
+const BLOCK_ELBOW_TARGET = THREE.MathUtils.degToRad(BLOCK_ELBOW_DEG)
+const BLOCK_LINK1_TARGET = THREE.MathUtils.degToRad(BLOCK_LINK1_DEG)
+
+// vero SOLO se il robot sta eseguendo la reach/resolve di una delle due
+// mosse — usata da EnemyAI.js e da main.js per congelare tutto il resto
+// (movimento/decisioni) finché l'animazione non finisce, invece di
+// ritypare lo stesso confronto di fase in due file diversi
+export function isCombatMoveActive(stealState, blockState) {
+  return stealState.phase !== 'idle' || blockState.phase !== 'idle'
+}
+
+export function initCombatMoves(ctx) {
+  const {
+    manipulator, otherManipulator, resetDribbleState, otherResetDribbleState,
+    dribbleTuning, dribbleState, getBasketball, otherShootingState, otherDashState, sfx,
+    otherHandlingState, otherStealState, otherPickupState, shootingState,
+    pickupState, handlingState,
+    // opzionale: da dove sta mirando questo robot, per il pivot dello
+    // sweep di STEAL — il giocatore la passa (crosshair/orbit camera), il
+    // nemico non ce l'ha (niente camera), ripiega sulle ruote
+    getAimYaw,
+    // stealState/blockState: SEMPRE passati da main.js (mai creati qui
+    // dentro) — stealState del NEMICO deve essere leggibile dall'istanza
+    // del GIOCATORE (otherStealState, per il lockout anti-steal-back) e
+    // viceversa, il che richiederebbe un riferimento circolare se create
+    // qui dentro (la seconda chiamata di initCombatMoves non esiste ancora
+    // quando gira la prima). Forma: { phase: 'idle'|'reach'|'resolve',
+    // phaseT, cooldown, resolveFromElbow, resolveFromLink1, startAimYaw }
+    // (blockState senza startAimYaw/resolveFromAimYaw, non fa sweep)
+    stealState, blockState,
+  } = ctx
+
+  const scratchOpponentBox = new THREE.Box3()
+  // bersaglio "box", non un punto preciso sulla palla — molto più
+  // permissivo, matcha l'ask esplicita ("beccare una box del robot")
+  function isTouchingOpponentBox() {
+    scratchOpponentBox.setFromObject(otherManipulator.root)
+    scratchOpponentBox.expandByScalar(STEAL_BOX_MARGIN)
+    return scratchOpponentBox.containsPoint(manipulator.root.position)
+  }
+
+  // condizione di rubabilità (NON include isTouchingOpponentBox — quello
+  // riguarda solo il momento del contatto, non va rivalutato a fine
+  // sweep). Ricalcolata fresca ad ogni chiamata, mai messa in cache: gli
+  // stessi controlli servono sia al momento del contatto sia di nuovo a
+  // fine animazione, e nel frattempo l'avversario può aver tirato/perso
+  // la palla — usata da updateSteal, non solo dichiarata qui per dedup
+  function canStealFrom(ball) {
+    // otherShootingState.phase === 'idle': l'avversario deve essere in
+    // palleggio automatico puro, NON a metà di un proprio windup/
+    // release/recover — altrimenti il possesso passa qui MA il suo
+    // updateShootAnimation continua per conto suo (non sa nulla del
+    // furto), arriva al rilascio e forza la palla in volo con la SUA
+    // fisica di tiro abbandonata: risultato, la palla finiva in terra a
+    // rimbalzare invece che in mano a chi l'ha appena rubata
+    // immune durante il dash (otherDashState.timeRemaining>0): il burst
+    // dura 0.15s a 6x velocità, un contatto lì sarebbe più un incidente
+    // di hitbox che uno STEAL vero e proprio — otherDashState è opzionale
+    // (il nemico non ha dash, quindi resta undefined nell'istanza che
+    // ruba da lui, niente da controllare in quel verso)
+    const otherIsDashing = otherDashState && otherDashState.timeRemaining > 0
+    // otherPickupState.phase === 'idle': l'avversario deve avere già
+    // FINITO il proprio pickup, non essere a metà — durante quei 0.3s
+    // ball.owner/state sono già "presi" (claim atomico) ma il suo
+    // manipulator.state resta ancora NO_BALL, quindi risulterebbe
+    // rubabile mentre in realtà sta ancora raccogliendola: due robot
+    // avrebbero finito per contendersi la posizione della palla
+    const otherIsPickingUp = otherPickupState && otherPickupState.phase === 'active'
+    return !!ball && ball.owner === otherManipulator && ball.state === BallState.HANDLED
+      && otherShootingState.phase === 'idle' && !otherIsDashing && !otherIsPickingUp
+  }
+
+  const scratchAimDir = new THREE.Vector3()
+  // punta la base (R1) verso worldPos, sul piano orizzontale — usata da
+  // BLOCK per seguire la palla in volo. Non aggiorna nulla se troppo
+  // vicino (direzione degenere, evita un atan2(0,0))
+  function aimBaseToward(worldPos) {
+    scratchAimDir.subVectors(worldPos, manipulator.root.position)
+    scratchAimDir.y = 0
+    if (scratchAimDir.lengthSq() < 1) return
+    manipulator.controls.setAimYaw(Math.atan2(scratchAimDir.x, scratchAimDir.z))
+  }
+
+  const scratchPaddlePos = new THREE.Vector3()
+  // BLOCK resta un bersaglio preciso (paletta-vs-palla, non box): il tiro
+  // in volo è veloce, un box grande quanto il robot lo renderebbe troppo
+  // facile — il raggio generoso (BLOCK_CONTACT_RADIUS) basta già
+  function paddleWorldPosition() {
+    return getObjectWorldPosition(manipulator.paddle, scratchPaddlePos)
+  }
+
+  // usabile solo senza palla, non durante un'altra STEAL/BLOCK già in corso
+  // (sullo stesso robot — le due mosse condividono setDribbleOffsets, non
+  // possono girare insieme), non in cooldown
+  // pickupState/shootingState PROPRI, non solo manipulator.state===NO_BALL:
+  // durante il pickup (0.3s) e durante il 'recover' del proprio tiro
+  // (dopo che manipulator.state è già tornato NO_BALL ma l'animazione di
+  // rientro non ha ancora finito) lo stato è "tecnicamente" NO_BALL ma
+  // c'è già un'altra animazione che scrive sugli stessi joint
+  // (setDribbleOffsets) — STEAL/BLOCK partendo insieme si sarebbero
+  // contesi i joint ogni frame invece di stare fermi finché l'altra non finisce
+  function canTrigger(moveState) {
+    return manipulator.state === RobotState.NO_BALL
+      && stealState.phase === 'idle' && blockState.phase === 'idle'
+      && pickupState.phase === 'idle' && shootingState.phase === 'idle'
+      && moveState.cooldown <= 0
+  }
+
+  // da dove sta MIRANDO ORA (getAimYaw — per il giocatore il
+  // crosshair/orbit della camera, per il nemico nessun callback passato,
+  // ripiega sulle ruote) — non da dove puntano le ruote: in NO_BALL la
+  // camera orbita libera indipendente da dove ci si è mossi per ultimo,
+  // uno sweep/rientro basato sulle ruote poteva partire o rientrare di
+  // lato rispetto a dove si stava davvero guardando. Usata sia per il
+  // pivot dello sweep (inizio reach) sia per il bersaglio di rientro
+  // (fine sweep/resolve) — prima la stessa espressione ripetuta in due punti
+  function resolveAimYaw() {
+    return getAimYaw ? getAimYaw() : manipulator.wheelsGroup.rotation.y
+  }
+
+  function startReach(moveState) {
+    const [elbowAmp, link1Amp] = dribbleAmplitudesRad(dribbleTuning)
+    moveState.phase = 'reach'
+    moveState.phaseT = 0
+    moveState.startElbow = dribbleState.armEase * elbowAmp
+    moveState.startLink1 = dribbleState.armEase * link1Amp
+    moveState.startAimYaw = resolveAimYaw()
+    // solo STEAL lo usa, ma resettarlo qui (inizio di OGNI nuovo reach,
+    // sia steal sia block) copre anche il caso in cui un reach precedente
+    // sia stato interrotto a metà (es. BACK TO MAIN MENU) con contatto già
+    // fatto: senza questo, il prossimo steal risulterebbe "riuscito"
+    // all'istante t>=1 senza che sia MAI avvenuto un vero contatto in
+    // QUESTO tentativo
+    moveState.contactMade = false
+  }
+
+  function triggerSteal() {
+    if (!canTrigger(stealState)) return
+    startReach(stealState)
+  }
+
+  function triggerBlock() {
+    if (!canTrigger(blockState)) return
+    startReach(blockState)
+  }
+
+  function beginResolve(moveState, elbowAtEnd, link1AtEnd) {
+    moveState.phase = 'resolve'
+    moveState.phaseT = 0
+    moveState.resolveFromElbow = elbowAtEnd
+    moveState.resolveFromLink1 = link1AtEnd
+  }
+
+  // vera solo se QUESTO robot ha appena ottenuto/mantenuto il possesso alla
+  // fine del resolve — l'altra mossa (o un pickup nel frattempo) potrebbe
+  // aver già cambiato le cose, si ricontrolla lo stato reale invece di
+  // assumerlo
+  function finishResolve() {
+    if (manipulator.state === RobotState.NO_BALL) {
+      const ball = getBasketball()
+      if (ball && ball.owner === manipulator) {
+        // resetToNeutralPossession chiude anche shootingState.released
+        // (senza, un PROPRIO tiro abbandonato in passato — mai raccolto di
+        // persona da allora — lo lasciava true: il dispatch in main.js
+        // instradava su updateShotFlight, fisica di gravità pura su
+        // velocità stantia, invece del palleggio normale, "la palla
+        // cadeva"/spariva pur essendo HANDLED) e grip/tilt (difensivo)
+        resetToNeutralPossession(manipulator, { dribbleState, handlingState, shootingState }, resetDribbleState)
+      }
+    }
+  }
+
+  function updateSteal(delta) {
+    if (stealState.cooldown > 0) stealState.cooldown -= delta
+    if (stealState.phase === 'idle') return
+    stealState.phaseT += delta
+
+    if (stealState.phase === 'reach') {
+      const t = Math.min(stealState.phaseT / STEAL_REACH_DURATION, 1)
+      const elbowTarget = STEAL_ELBOW_TARGET
+      const link1Target = STEAL_LINK1_TARGET
+      const elbowNow = THREE.MathUtils.lerp(stealState.startElbow, elbowTarget, t)
+      const link1Now = THREE.MathUtils.lerp(stealState.startLink1, link1Target, t)
+      manipulator.controls.setDribbleOffsets(elbowNow, link1Now)
+      // SWEEP: la base spazza da -ampiezza a +ampiezza attorno alla
+      // direzione di partenza mentre il braccio resta teso — un vero
+      // spazzolamento, non un allungo statico
+      const sweepAngle = THREE.MathUtils.lerp(-1, 1, t) * STEAL_SWEEP_AMPLITUDE
+      const aimYawNow = stealState.startAimYaw + sweepAngle
+      manipulator.controls.setAimYaw(aimYawNow)
+
+      const ball = getBasketball()
+      // il contatto è solo TRACCIATO qui (non trasferisce ancora nulla):
+      // lo sweep va visto per intero, il possesso passa solo a fine
+      // animazione (t>=1) sotto — prima passava SUBITO al primo contatto,
+      // tagliando corto lo sweep proprio nel momento in cui aveva successo.
+      // canStealFrom() ricalcolata FRESCA sia qui sia a fine sweep (non un
+      // valore congelato): tra le due valutazioni possono passare diversi
+      // frame, l'avversario potrebbe aver tirato/perso la palla nel
+      // frattempo — prima erano due copie a mano della stessa espressione
+      // a 4 condizioni, ora un'unica funzione condivisa sotto
+      if (!stealState.contactMade && canStealFrom(ball) && isTouchingOpponentBox()) {
+        stealState.contactMade = true
+      }
+      if (t >= 1) {
+        if (stealState.contactMade) {
+          if (canStealFrom(ball)) {
+            // successo: possesso trasferito (fisica/dribble dell'altro
+            // robot deve smettere di toccare la palla dal prossimo frame),
+            // ma la POSA visiva rientra a neutro prima di passare a DRIBBLE
+            ball.setOwner(manipulator)
+            // altrimenti la palla resta congelata a mezz'aria fino a fine
+            // resolve: né l'ex proprietario (ormai NO_BALL, il suo dribble
+            // non la tocca più) né questo robot (ancora NO_BALL per altri
+            // 0.2s, il suo dribble non è ancora partito) la stanno
+            // aggiornando — sembrava "rimbalzare via" prima di teletrasportarsi
+            // in mano di colpo. Agganciata SUBITO qui, poi ogni frame di
+            // resolve sotto, così il passaggio è un aggancio immediato e
+            // pulito invece di un salto dopo un blocco a mezz'aria
+            snapBallToRestPoint(manipulator, ball)
+            otherManipulator.setState(RobotState.NO_BALL)
+            otherResetDribbleState()
+            // grip/tilt della VITTIMA: se era in HANDLING quando gliel'hai
+            // rubata, il grip poteva essere ancora parzialmente chiuso —
+            // resetDribbleState non lo tocca (è HANDLING-specifico, non
+            // dribble), restava così finché non ripigliava la palla, con la
+            // paletta visibilmente "storta" nel palleggio successivo
+            otherHandlingState.grip = 0
+            otherHandlingState.tiltOffset = 0
+            otherManipulator.controls.setGrip(0)
+            // lockout anti-steal-back: appena derubato, 2s prima di poter
+            // ritentare uno STEAL — senza, con STEAL_COOLDOWN a 0 (mai
+            // usato prima) poteva rubarla indietro nello stesso istante
+            otherStealState.cooldown = Math.max(otherStealState.cooldown, VICTIM_STEAL_LOCKOUT)
+            sfx.playSteal()
+          }
+        }
+        stealState.contactMade = false
+        beginResolve(stealState, elbowTarget, link1Target)
+        stealState.resolveFromAimYaw = aimYawNow
+      }
+    } else { // 'resolve'
+      const t = Math.min(stealState.phaseT / RESOLVE_DURATION, 1)
+      manipulator.controls.setDribbleOffsets(
+        THREE.MathUtils.lerp(stealState.resolveFromElbow, 0, t),
+        THREE.MathUtils.lerp(stealState.resolveFromLink1, 0, t),
+      )
+      // se il resolve segue un furto RIUSCITO (owner già questo robot),
+      // la palla resta agganciata alla paletta per tutta la durata —
+      // senza, tornerebbe a congelarsi a mezz'aria un frame dopo l'aggancio
+      if (getBasketball()?.owner === manipulator) snapBallToRestPoint(manipulator, getBasketball())
+      // lo sweep può finire a metà spazzolata (successo prima di t=1) —
+      // rientra verso resolveAimYaw() (fresca ogni frame, non quella
+      // congelata a inizio reach): con wheelsGroup.rotation.y da solo
+      // (sbagliato per il giocatore, la mira in dribble segue la CAMERA,
+      // non le ruote) il rientro convergeva verso il posto sbagliato, poi
+      // il dribble normale faceva scattare di colpo l'angolo vero
+      manipulator.controls.setAimYaw(THREE.MathUtils.lerp(stealState.resolveFromAimYaw, resolveAimYaw(), t))
+      if (t >= 1) {
+        stealState.phase = 'idle'
+        stealState.cooldown = STEAL_COOLDOWN
+        finishResolve()
+      }
+    }
+  }
+
+  function updateBlock(delta) {
+    if (blockState.cooldown > 0) blockState.cooldown -= delta
+    if (blockState.phase === 'idle') return
+    blockState.phaseT += delta
+
+    if (blockState.phase === 'reach') {
+      const t = Math.min(blockState.phaseT / BLOCK_REACH_DURATION, 1)
+      const elbowTarget = BLOCK_ELBOW_TARGET
+      const link1Target = BLOCK_LINK1_TARGET
+      const elbowNow = THREE.MathUtils.lerp(blockState.startElbow, elbowTarget, t)
+      const link1Now = THREE.MathUtils.lerp(blockState.startLink1, link1Target, t)
+      manipulator.controls.setDribbleOffsets(elbowNow, link1Now)
+
+      const ball = getBasketball()
+      // "verso l'altro": la base punta dritta alla palla per tutta la
+      // reach, non una posa fissa — aggiornata ogni frame perché in volo
+      // la palla si muove sotto gli occhi
+      if (ball) aimBaseToward(ball.position)
+      if (ball && ball.state === BallState.FREE_SHOT) {
+        if (paddleWorldPosition().distanceTo(ball.position) <= BLOCK_CONTACT_RADIUS) {
+          // deviato: nessun owner assegnato, "sporca" e riprendibile subito
+          // da chiunque — niente canestro (il volo non arriva mai a segno)
+          ball.setState(BallState.FREE)
+          sfx.playBlock()
+          beginResolve(blockState, elbowNow, link1Now)
+          return
+        }
+      }
+      if (t >= 1) beginResolve(blockState, elbowTarget, link1Target)
+    } else { // 'resolve'
+      const t = Math.min(blockState.phaseT / RESOLVE_DURATION, 1)
+      manipulator.controls.setDribbleOffsets(
+        THREE.MathUtils.lerp(blockState.resolveFromElbow, 0, t),
+        THREE.MathUtils.lerp(blockState.resolveFromLink1, 0, t),
+      )
+      if (t >= 1) {
+        blockState.phase = 'idle'
+        blockState.cooldown = BLOCK_COOLDOWN
+        // BLOCK non tocca mai il possesso di questo robot (era già NO_BALL
+        // prima e resta NO_BALL dopo), niente finishResolve() qui
+      }
+    }
+  }
+
+  return {
+    triggerSteal, triggerBlock, updateSteal, updateBlock,
+    stealState, blockState,
+    // per la UI (HUD pill): disponibile solo senza palla, cooldown finito,
+    // nessuna delle due mosse già in corso
+    canUseSteal: () => canTrigger(stealState),
+    canUseBlock: () => canTrigger(blockState),
+  }
+}

@@ -14,7 +14,10 @@ import { RobotBase } from './RobotBase.js'
 export const MANIPULATOR_STATS = { speed: 3, shooting: 1 }
 
 export class ManipulatorRobot extends RobotBase {
-  constructor() {
-    super({ factory: createManipulatorRobot, stats: MANIPULATOR_STATS, type: 'MANIPULATOR' })
+  // team facoltativo (default undefined, retrocompatibile con la preview
+  // robot del Main Menu che non appartiene a nessuna squadra) — il robot
+  // del giocatore/nemico lo passa esplicitamente (Team.A/Team.B)
+  constructor(team) {
+    super({ factory: createManipulatorRobot, stats: MANIPULATOR_STATS, type: 'MANIPULATOR', team })
   }
 }

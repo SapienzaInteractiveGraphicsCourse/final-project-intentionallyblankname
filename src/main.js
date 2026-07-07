@@ -7,6 +7,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
 import { ManipulatorRobot, MANIPULATOR_STATS } from './robots/ManipulatorRobot.js'
+import { Team } from './Team.js'
 import { RobotState } from './robots/RobotBase.js'
 import { createProceduralPBRMaps, drawBrushedMetal } from './robots/manipulator.js'
 import { Basketball, BallState } from './Basketball.js'
@@ -16,10 +17,12 @@ import { SoundEffects } from './SoundEffects.js'
 import { CollisionWorld, RIM_RING_RADIUS } from './CollisionWorld.js'
 import { initMainMenu } from './MainMenu.js'
 import { angleToForward, rotateRight, lerpAngle } from './mathUtils.js'
-import { initBallPossession, stepDribble, dribbleAmplitudesRad } from './BallPossession.js'
+import { initBallPossession, stepDribble, dribbleAmplitudesRad, getObjectWorldPosition } from './BallPossession.js'
 import { initShootingSystem } from './ShootingSystem.js'
+import { initEnemyAI, AI_MIN_PLAYER_DISTANCE } from './EnemyAI.js'
+import { initCombatMoves, STEAL_COOLDOWN, BLOCK_COOLDOWN, isCombatMoveActive } from './CombatMoves.js'
 import { initDebugPanel } from './debugPanel.js'
-import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from './constants.js'
+import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX, BALL_GRAVITY } from './constants.js'
 
 // --- Renderer ---
 // antialias:true qui non ha effetto: il rendering passa da EffectComposer
@@ -335,6 +338,23 @@ class SpecularGlossinessPlugin {
 const loader = new GLTFLoader()
 loader.register(parser => new SpecularGlossinessPlugin(parser))
 
+// --- Loading Screen ---
+// solo 2 asset asincroni in tutto il progetto (campo + pallone, il robot è
+// procedurale) — progresso REALE (conteggio dei loader.load() completati),
+// non inventato: a differenza di thegoblinslayers (scouting, vedi README),
+// l'unico altro repo del corso con un loading screen vero, che usa
+// percentuali hardcoded per milestone invece di un conteggio vero, qui non
+// serve fingere perché tracciare i 2 asset reali è altrettanto semplice
+const TOTAL_ASSETS_TO_LOAD = 2
+let assetsLoadedCount = 0
+const loadingScreenEl = document.getElementById('loading-screen')
+const loadingBarFillEl = document.getElementById('loading-bar-fill')
+function markAssetLoaded() {
+  assetsLoadedCount++
+  loadingBarFillEl.style.width = `${Math.round((assetsLoadedCount / TOTAL_ASSETS_TO_LOAD) * 100)}%`
+  if (assetsLoadedCount >= TOTAL_ASSETS_TO_LOAD) loadingScreenEl.classList.add('fade-out')
+}
+
 // stesso generatore procedurale (canvas → height-field → normal/roughness map)
 // già usato per le texture del robot, riusato qui per panchine e palo
 // lampione invece di scaricare texture pronte — coerente con "niente asset
@@ -400,6 +420,7 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
   // placeholder (sharedWoodMaterial non esisteva ancora, si popola durante
   // il traverse appena fatto), ora riassegnate al vero legno condiviso
   if (sharedWoodMaterial) hoopPoleMeshes.forEach(mesh => { mesh.material = sharedWoodMaterial })
+  markAssetLoaded()
 })
 
 // --- Pallone (modello dedicato: color map + normal map + metallic/roughness) ---
@@ -550,11 +571,17 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
     if (child.material?.color) child.material.color.multiplyScalar(BALL_COLOR_BRIGHTNESS)
   })
   basketball = new Basketball(gltf.scene)
-  // il robot parte già in possesso della palla (palleggio automatico da
+  // il giocatore parte già in possesso della palla (palleggio automatico da
   // subito, non un pickup da fare) — FREE è il default della classe per una
-  // palla "generica", qui va corretto esplicitamente all'avvio
+  // palla "generica", qui va corretto esplicitamente all'avvio. Riferimento
+  // a `manipulator` sicuro anche se dichiarato più sotto nel file: questo
+  // callback è asincrono (il GLTF carica in rete), l'intero script
+  // sincrono (comprese le dichiarazioni di manipulator/enemyManipulator)
+  // ha già finito di girare quando arriva davvero
   basketball.setState(BallState.HANDLED)
+  basketball.setOwner(manipulator)
   scene.add(gltf.scene)
+  markAssetLoaded()
 })
 
 // Preview di traiettoria (rebuildTrajectoryTube/hideTrajectoryPreview/
@@ -563,16 +590,17 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
 // per separarla dal resto dello Shooting System senza duplicare codice
 
 // --- Robot (Step 4: solo modello statico, no animazione/movimento ancora) ---
-const manipulator = new ManipulatorRobot()
+const manipulator = new ManipulatorRobot(Team.A)
 // unità locali (~1-4) → scala mondo: lampioni a Y=268, hoop reg. ~305cm,
 // unità mondo ≈ 1cm → tarato a 45 dopo test visivi via slider debug (P).
 // Passa da controls.manipulatorScale (non root.scale diretto) così lo
 // stato tracciato resta coerente con "Copy config"
 manipulator.controls.manipulatorScale(45)
 manipulator.controls.setBallRestOffset(BALL_REST_EXTRA_OFFSET)
-// placeholder: vicino allo spawn della spectator camera (0,15,30), non
-// ancora la posizione di gioco reale
-manipulator.root.position.set(0, 0, 0)
+// dal proprio lato di campo (stessa X di resetGameplayState in
+// MainMenu.js — PLAYER_SPAWN_X/ENEMY_SPAWN_X lì, ripetuta qui solo per il
+// primissimo avvio prima che esista un menu da cui tornare)
+manipulator.root.position.set(-300, 0, 0)
 manipulator.root.traverse(child => {
   if (child.isMesh) {
     child.castShadow = true
@@ -580,6 +608,31 @@ manipulator.root.traverse(child => {
   }
 })
 scene.add(manipulator.root)
+
+// --- Nemico (1v1, Section 3): stesso identico modello procedurale, solo
+// Team diverso e guidato dall'AI invece che dall'input — nessuna nuova
+// classe robot, MANIPULATOR resta l'unica implementata (roadmap). Spawn a
+// una distanza ragionevole dal giocatore, non sovrapposto: la posizione
+// vera verrà gestita dall'AI (src/EnemyAI.js) una volta che PRACTICE/1v1
+// distinguono davvero i due modi
+const enemyManipulator = new ManipulatorRobot(Team.B)
+enemyManipulator.controls.manipulatorScale(45)
+enemyManipulator.controls.setBallRestOffset(BALL_REST_EXTRA_OFFSET)
+enemyManipulator.root.position.set(300, 0, 0)
+enemyManipulator.root.traverse(child => {
+  if (child.isMesh) {
+    child.castShadow = true
+    child.receiveShadow = true
+  }
+})
+// RobotBase parte di default in DRIBBLE (l'ipotesi valida finché esisteva
+// un solo robot, sempre in possesso all'avvio) — il nemico invece NON
+// possiede la palla all'avvio (il giocatore sì, vedi setOwner(manipulator)
+// al caricamento del GLTF pallone): senza questa correzione esplicita,
+// enemyUpdateDribble proverebbe comunque a muovere ogni tick la stessa
+// basketball.position condivisa, in conflitto con quella del giocatore
+enemyManipulator.setState(RobotState.NO_BALL)
+scene.add(enemyManipulator.root)
 
 // --- Spectator Camera ---
 const controls = new PointerLockControls(camera, renderer.domElement)
@@ -734,7 +787,11 @@ const WHEEL_TURN_SPEED = 18 // rad/s equivalenti: "rapidissima" ma non istantane
 
 // --- Dash (Shift in Play) ---
 const dashPanel = document.getElementById('dash-panel')
-const dashBarFill = document.getElementById('dash-bar-fill')
+const dashChargeFillEls = [document.getElementById('dash-charge-fill-0'), document.getElementById('dash-charge-fill-1')]
+// --- STEAL/BLOCK HUD (Q/E in Play) ---
+const combatPanel = document.getElementById('combat-panel')
+const stealBarFill = document.getElementById('steal-bar-fill')
+const blockBarFill = document.getElementById('block-bar-fill')
 const crosshair = document.getElementById('crosshair')
 // riusata anche dallo slider "Crosshair Height" nel pannello debug, invece
 // di ripetere la stessa formula in due punti
@@ -743,19 +800,27 @@ function updateCrosshairPosition() {
 }
 updateCrosshairPosition()
 const dashDirection = new THREE.Vector3()
+const scratchPlayerVsEnemy = new THREE.Vector3()
 const DASH_COOLDOWN_TIME = 4
 const DASH_DURATION = 0.15
-const DASH_SPEED_MULTIPLIER = 6
+const DASH_SPEED_MULTIPLIER = 6.6 // +10% sulla distanza percorsa dal burst rispetto al valore originale (6)
+// 2 cariche indipendenti invece di un solo cooldown: si può scattare due
+// volte di fila (a cariche piene), poi si aspetta — le cariche si
+// ricaricano IN SEQUENZA (un solo timer alla volta, non due in parallelo),
+// ognuna alla stessa cadenza di prima (DASH_COOLDOWN_TIME)
+const DASH_MAX_CHARGES = 2
 const dashState = {
-  cooldown: 0,      // secondi rimanenti prima che il dash sia di nuovo pronto
+  charges: DASH_MAX_CHARGES,
+  rechargeTimer: 0, // secondi alla PROSSIMA carica (0 se già a cariche piene)
   timeRemaining: 0, // secondi rimanenti dello scatto in corso
 }
 
 document.addEventListener('keydown', e => {
-  if (e.code !== 'ShiftLeft' || e.repeat || menuState.mode !== 'play' || dashState.cooldown > 0) return
+  if (e.code !== 'ShiftLeft' || e.repeat || menuState.mode !== 'play' || dashState.charges <= 0) return
   angleToForward(movementState.facing, dashDirection)
   dashState.timeRemaining = DASH_DURATION
-  dashState.cooldown = DASH_COOLDOWN_TIME
+  dashState.charges--
+  if (dashState.rechargeTimer <= 0) dashState.rechargeTimer = DASH_COOLDOWN_TIME
 })
 
 document.addEventListener('keydown', e => {
@@ -763,6 +828,7 @@ document.addEventListener('keydown', e => {
   menuState.mode = menuState.mode === 'spectate' ? 'play' : 'spectate'
   modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
   dashPanel.classList.toggle('hidden', menuState.mode !== 'play')
+  combatPanel.classList.toggle('hidden', menuState.mode !== 'play')
   crosshair.classList.toggle('hidden', menuState.mode !== 'play')
   // forza un nuovo click-per-entrare nel cambio modalità, per evitare
   // che un delta mouse residuo salti da uno schema di controllo all'altro
@@ -804,8 +870,12 @@ document.addEventListener('mousedown', e => {
   rightMouseDown = true
   if (shootingState.phase !== 'idle') return // non interrompere un tiro in corso
   // senza la palla non c'è niente da stringere in mano: tasto destro non fa
-  // nulla finché non la si raccoglie (pickup automatico toccandola a terra)
-  if (!basketball || basketball.state !== BallState.HANDLED) return
+  // nulla finché non la si raccoglie (pickup automatico toccandola a terra).
+  // owner === manipulator, non solo state === HANDLED: in 1v1 la palla può
+  // essere HANDLED dall'AVVERSARIO — senza questo controllo il tasto destro
+  // faceva entrare in HANDLING anche senza possederla davvero (bug visibile
+  // soprattutto dopo un contatto/steal dell'avversario)
+  if (!basketball || basketball.state !== BallState.HANDLED || basketball.owner !== manipulator) return
   // la mira riparte da un pitch fisso e sensato invece di quello che si
   // aveva in DRIBBLE (che potrebbe essere un estremo, tipo guardando giù) —
   // il salto si vede scorrere comunque: camera.quaternion.slerp verso il
@@ -841,6 +911,11 @@ const shootingState = {
   phase: 'idle',      // 'idle' | 'windup' | 'release' | 'recover'
   phaseT: 0,
   released: false,    // per-tiro: true dal frame in cui la palla lascia davvero la paletta
+  // per-tiro: true dal primo urto (backboard/ferro/muro/palo/panchina/
+  // pavimento) dopo il rilascio — BallState passa da FREE_SHOT (bloccabile
+  // con BLOCK, niente pickup automatico) a FREE (palla "sporca", pickup
+  // normale) esattamente in quel momento, non prima
+  hasBounced: false,
   // catturata al momento del rilascio (posizione del ROBOT, non della palla
   // quando arriva al canestro) — la regola dei 2/3 punti dipende da dove si
   // tirava, non da dove si trova la palla quando entra
@@ -898,6 +973,7 @@ document.addEventListener('mousedown', e => {
   shootingState.phase = 'windup'
   shootingState.phaseT = 0
   shootingState.released = false
+  shootingState.hasBounced = false
   clearAllCollisionCooldowns()
 })
 
@@ -909,10 +985,14 @@ document.addEventListener('mousedown', e => {
 // interpolato) degli offset di tiro: è un tasto di test/debug, non fa parte
 // del flusso di gioco normale
 document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyR' || e.repeat || menuState.mode !== 'play') return
+  // disabilitato in 1V1: "ricaricare" la palla in mano a comando sarebbe
+  // un modo per aggirare STEAL/BLOCK contro un vero avversario — resta un
+  // tasto di test valido solo in PRACTICE (nessuno da imbrogliare)
+  if (e.code !== 'KeyR' || e.repeat || menuState.mode !== 'play' || menuState.gameMode === GameMode.ONE_V_ONE) return
   shootingState.phase = 'idle'
   shootingState.phaseT = 0
   shootingState.released = false
+  shootingState.hasBounced = false
   shootingState.stateTransitionTimer = 0
   clearAllCollisionCooldowns()
   manipulator.controls.setAimPitch(0)
@@ -924,7 +1004,10 @@ document.addEventListener('keydown', e => {
   // il tasto di test "ricarica" la palla forzatamente in mano — deve anche
   // riportarla a HANDLED, altrimenti il tasto destro resterebbe bloccato
   // dal gate pensato per il pickup normale (basketball.state !== HANDLED)
-  if (basketball) basketball.setState(BallState.HANDLED)
+  if (basketball) {
+    basketball.setState(BallState.HANDLED)
+    basketball.setOwner(manipulator)
+  }
   if (rightMouseDown) {
     manipulator.setState(RobotState.HANDLING)
   } else {
@@ -988,6 +1071,7 @@ const dribbleState = {
 // in più passi da DRIBBLE_FIXED_DT, mai in un passo unico anomalo
 const DRIBBLE_FIXED_DT = 1 / 120
 let dribbleAccumulator = 0
+let enemyDribbleAccumulator = 0 // stesso accumulator, tracciato a parte: il nemico palleggia in modo indipendente dal giocatore
 
 // --- Loop ---
 const clock = new THREE.Clock()
@@ -1051,15 +1135,35 @@ const PICKUP_COARSE_RADIUS = 300
 // invece del valore diretto. BALL_RADIUS è un `let` condiviso con molto
 // altro codice qui in main.js per lo stesso motivo di fondo (letto fresco
 // ad ogni chiamata, non congelato allo spread)
+// gameContext: campi VERAMENTE condivisi da entrambi i robot (giocatore E
+// nemico) — un solo pallone/collisionWorld/audio in scena, stesso tuning
+// fisico. NON qui: manipulator/dribbleState/handlingState/pickupState/
+// shootingState/computeAimPitchOffset/getShotDirection — sono per-robot
+// (ognuno pilotato in modo diverso, input utente vs AI, con la propria
+// macchina a stati indipendente), passati espliciti ad ogni chiamata sotto
 const gameContext = {
-  manipulator, getBasketball: () => basketball,
+  getBasketball: () => basketball,
   camera, scene, sfx, controls,
-  cameraState, dribbleState, handlingState, pickupState, shootingState,
+  cameraState,
   dribbleTuning, handlingTuning, shootTuning,
   getBallRadius: () => BALL_RADIUS,
-  computeAimPitchOffset,
 }
 
+// stealState/blockState (e le versioni enemy): dichiarati QUI, PRIMA di
+// initBallPossession — checkForPickup li legge (sotto) per non far partire
+// un pickup mentre il proprio steal/block è ancora a metà del resolve (due
+// animazioni sugli stessi joint nello stesso frame, la paletta finiva
+// "aperta" come nella posa di block invece di interpolare verso il
+// dribble). Anche initCombatMoves li userà più sotto: l'istanza del
+// giocatore deve leggere/scrivere lo stealState del NEMICO (per il lockout
+// anti-steal-back) e viceversa, il che servirebbe un riferimento
+// circolare se nascessero dentro initCombatMoves stesso
+const stealState = { phase: 'idle', phaseT: 0, cooldown: 0, resolveFromElbow: 0, resolveFromLink1: 0, startAimYaw: 0, contactMade: false }
+const blockState = { phase: 'idle', phaseT: 0, cooldown: 0, resolveFromElbow: 0, resolveFromLink1: 0 }
+const enemyStealState = { phase: 'idle', phaseT: 0, cooldown: 0, resolveFromElbow: 0, resolveFromLink1: 0, startAimYaw: 0, contactMade: false }
+const enemyBlockState = { phase: 'idle', phaseT: 0, cooldown: 0, resolveFromElbow: 0, resolveFromLink1: 0 }
+
+// --- Giocatore: palleggio/HANDLING/pickup/tiro pilotati da mouse+tastiera ---
 // Ball Possession: palleggio automatico, HANDLING, pickup — estratti in
 // src/BallPossession.js (stesso principio di MainMenu.js: un unico oggetto
 // context, zero import circolari)
@@ -1068,26 +1172,214 @@ const {
   updateDribble, updateHandling, checkForPickup, updatePickup,
 } = initBallPossession({
   ...gameContext,
+  manipulator, dribbleState, handlingState, pickupState, shootingState,
+  stealState, blockState,
+  computeAimPitchOffset,
   dribbleBounceSoundVolume: DRIBBLE_BOUNCE_SOUND_VOLUME,
   pickupDuration: PICKUP_DURATION, pickupMargin: PICKUP_MARGIN, pickupCoarseRadius: PICKUP_COARSE_RADIUS,
 })
 
+// Direzione di tiro del giocatore: raycast dalla camera attraverso il PIXEL
+// del crosshair (non il centro schermo) — in HANDLING la camera ha un
+// orientamento libero vero (quaternion, non lookAt), quindi quel raggio è
+// esattamente dove si sta mirando. Spostata qui da ShootingSystem.js: quel
+// modulo ora riceve getShotDirection dall'esterno (il nemico ne passa una
+// diversa, basata sull'AI — vedi sotto), non deve sapere cos'è un crosshair
+const shootRaycaster = new THREE.Raycaster()
+const crosshairNDC = new THREE.Vector2()
+function getShotDirection(out) {
+  crosshairNDC.set(0, (2 * CROSSHAIR_HEIGHT) / window.innerHeight)
+  shootRaycaster.setFromCamera(crosshairNDC, camera)
+  return out.copy(shootRaycaster.ray.direction)
+}
+
 // Shooting System: tiro, hoop assist, punteggio, preview di traiettoria —
 // estratti in src/ShootingSystem.js. rimRingRadius passato direttamente
 // (const importata da CollisionWorld.js, mai riassegnata — nessun bisogno
-// di getter). getCrosshairHeight: CROSSHAIR_HEIGHT resta un `let`
-// condiviso con molto altro qui in main.js (debug panel, updateCrosshairPosition)
+// di getter). score/scoreboard restano UN SOLO contatore condiviso per ora
+// (stile PRACTICE): il punteggio per-squadra arriva insieme alla vera
+// modalità 1v1 nel menu (ancora disabilitata), non prima
 const {
-  getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc,
   addScore, checkHoopScore, clearAllCollisionCooldowns,
   updateShotFlight, updateShootAnimation, updateTrajectoryPreview, hideTrajectoryPreview,
   shotVelocity, trajDebug,
   resetScore: resetShootingScore,
 } = initShootingSystem({
   ...gameContext,
+  manipulator, dribbleState, handlingState, shootingState,
+  computeAimPitchOffset, getShotDirection,
   collisionWorld,
-  getCrosshairHeight: () => CROSSHAIR_HEIGHT,
   rimRingRadius: RIM_RING_RADIUS,
+  getTargetHoopIndex: getPlayerTargetHoopIndex,
+})
+
+// --- Nemico (1v1, Section 3): stessa identica macchina a stati/fisica,
+// pilotata dall'AI (src/EnemyAI.js) invece che da mouse/tastiera — un set
+// di oggetti-stato indipendente, MAI condiviso col giocatore: i due robot
+// palleggiano/mirano/tirano ognuno per conto proprio
+const enemyShootingState = {
+  phase: 'idle', phaseT: 0, released: false, hasBounced: false, wasInsideArc: false,
+  stateTransitionTimer: 0,
+  startElbowOffset: 0, startLink1Offset: 0, startGrip: 0, startTilt: 0,
+  recoverStartAimPitch: 0,
+}
+const enemyPickupState = { phase: 'idle', phaseT: 0 }
+const enemyDribbleState = {
+  phase: 'push', phaseT: 0, armEase: 0,
+  ballVelocityY: 0, riseBallisticY: 0, previousPushPaddleY: null,
+  lockOffset: new THREE.Vector3(),
+}
+const enemyHandlingState = { grip: 0, tiltOffset: 0 }
+
+const {
+  resetDribbleState: enemyResetDribbleState,
+  updateDribble: enemyUpdateDribble, updateHandling: enemyUpdateHandling,
+  checkForPickup: enemyCheckForPickup, updatePickup: enemyUpdatePickup,
+} = initBallPossession({
+  ...gameContext,
+  manipulator: enemyManipulator,
+  dribbleState: enemyDribbleState, handlingState: enemyHandlingState,
+  pickupState: enemyPickupState, shootingState: enemyShootingState,
+  stealState: enemyStealState, blockState: enemyBlockState,
+  // il nemico non ha una "camera" da inseguire (computeAimPitchOffset del
+  // giocatore legge cameraState.orbitPitch) — l'inclinazione reale del tiro
+  // viene comunque da getShotDirection, questo tocca solo il gomito visivo
+  computeAimPitchOffset: () => 0,
+  dribbleBounceSoundVolume: DRIBBLE_BOUNCE_SOUND_VOLUME,
+  pickupDuration: PICKUP_DURATION, pickupMargin: PICKUP_MARGIN, pickupCoarseRadius: PICKUP_COARSE_RADIUS,
+})
+
+// canestro assegnato per squadra: Team.A (giocatore) mira/segna solo su
+// hoops[0], Team.B (nemico) solo su hoops[1] — in 1V1 nessuno dei due può
+// segnare "ovunque". In PRACTICE (nessuna squadra avversaria reale) resta
+// libero: getTargetHoopIndex per il giocatore ritorna null finché
+// menuState.gameMode non è davvero ONE_V_ONE, vedi sotto
+const TEAM_HOOP_INDEX = { [Team.A]: 0, [Team.B]: 1 }
+function getPlayerTargetHoopIndex() {
+  return menuState.gameMode === GameMode.ONE_V_ONE ? TEAM_HOOP_INDEX[Team.A] : null
+}
+// il nemico esiste SOLO in 1V1 (in PRACTICE resta nascosto/inattivo).
+// null qui non avrebbe senso pratico, ma niente vieta di restare coerenti
+// con la stessa formula del giocatore
+function getEnemyTargetHoopIndex() {
+  return menuState.gameMode === GameMode.ONE_V_ONE ? TEAM_HOOP_INDEX[Team.B] : null
+}
+
+// direzione di tiro dell'AI: NON una linea retta verso il canestro (a
+// velocità costante e una direzione piatta, la gravità la faceva cadere
+// molto prima del bersaglio — "tirano tutti al suolo") — vera soluzione
+// balistica: dati velocità (costante, come il giocatore) e gravità, quale
+// ANGOLO di elevazione fa atterrare il proiettile esattamente sul
+// bersaglio? Formula standard del tiro parabolico, risolta per l'angolo:
+//   tan(θ) = (v² ± √(v⁴ - g(g·x² + 2·y·v²))) / (g·x)
+// due soluzioni (arco basso/arco alto): presa quella ALTA (+), un vero
+// tiro in arco verso il canestro invece di una linea quasi piatta. Se il
+// discriminante è negativo, il bersaglio è fuori portata a questa
+// velocità: 50° come ripiego ragionevole piuttosto che un errore
+function solveBallisticElevation(horizontalDist, heightDiff, speed) {
+  const v2 = speed * speed
+  const discriminant = v2 * v2 - BALL_GRAVITY * (BALL_GRAVITY * horizontalDist * horizontalDist + 2 * heightDiff * v2)
+  if (discriminant < 0 || horizontalDist < 1) return THREE.MathUtils.degToRad(50)
+  const tanTheta = (v2 + Math.sqrt(discriminant)) / (BALL_GRAVITY * horizontalDist)
+  return Math.atan(tanTheta)
+}
+const enemyAimTarget = new THREE.Vector3()
+const enemyPaddleWorldPos = new THREE.Vector3()
+function enemyGetShotDirection(out) {
+  const hoop = collisionWorld.hoops[TEAM_HOOP_INDEX[Team.B]]
+  enemyAimTarget.set(hoop.center.x, hoop.center.y, hoop.center.z)
+  // dalla paletta reale (dove la palla lascia davvero la mano), non dal
+  // root a terra — la differenza di altezza conta per l'angolo balistico
+  getObjectWorldPosition(enemyManipulator.paddle, enemyPaddleWorldPos)
+  const dx = enemyAimTarget.x - enemyPaddleWorldPos.x
+  const dz = enemyAimTarget.z - enemyPaddleWorldPos.z
+  const horizontalDist = Math.sqrt(dx * dx + dz * dz)
+  const heightDiff = enemyAimTarget.y - enemyPaddleWorldPos.y
+  const speed = enemyGetEffectiveShotSpeed(enemyManipulator.root.position)
+  const elevation = solveBallisticElevation(horizontalDist, heightDiff, speed)
+  const invDist = 1 / horizontalDist
+  return out.set(dx * invDist * Math.cos(elevation), Math.sin(elevation), dz * invDist * Math.cos(elevation)).normalize()
+}
+
+// niente updateTrajectoryPreview/hideTrajectoryPreview per il nemico: non
+// c'è una camera libera da inseguire mentre mira, quel concetto resta
+// solo-giocatore
+const {
+  updateShotFlight: enemyUpdateShotFlight, updateShootAnimation: enemyUpdateShootAnimation,
+  shotVelocity: enemyShotVelocity, clearAllCollisionCooldowns: enemyClearAllCollisionCooldowns,
+  resetScore: resetEnemyShootingScore, getEffectiveShotSpeed: enemyGetEffectiveShotSpeed,
+} = initShootingSystem({
+  ...gameContext,
+  manipulator: enemyManipulator,
+  dribbleState: enemyDribbleState, handlingState: enemyHandlingState, shootingState: enemyShootingState,
+  computeAimPitchOffset: () => 0, getShotDirection: enemyGetShotDirection,
+  collisionWorld,
+  rimRingRadius: RIM_RING_RADIUS,
+  scoreElementId: 'enemy-score-value', // contatore separato dal giocatore — vedi Point System 1v1
+  getTargetHoopIndex: getEnemyTargetHoopIndex,
+})
+
+// STEAL/BLOCK (src/CombatMoves.js): un'istanza per robot, ognuna sa solo
+// del proprio manipulator e di "l'altro" — simmetrico, funziona identico
+// se a rubare/bloccare è il giocatore o il nemico. Costruite PRIMA
+// dell'AI (sotto): l'AI usa enemyTriggerSteal/enemyTriggerBlock
+// (stealState/blockState/enemyStealState/enemyBlockState dichiarati più in
+// alto, PRIMA di initBallPossession: checkForPickup li legge per non far
+// partire un pickup mentre il proprio steal/block è ancora a metà)
+const {
+  triggerSteal, triggerBlock, updateSteal, updateBlock,
+  canUseSteal, canUseBlock,
+} = initCombatMoves({
+  manipulator, otherManipulator: enemyManipulator,
+  resetDribbleState, otherResetDribbleState: enemyResetDribbleState,
+  dribbleTuning, dribbleState, getBasketball: () => basketball,
+  otherShootingState: enemyShootingState, otherHandlingState: enemyHandlingState,
+  otherStealState: enemyStealState, otherPickupState: enemyPickupState, sfx,
+  stealState, blockState, shootingState, pickupState, handlingState,
+  // sweep di STEAL: parte da dove sta guardando la camera (crosshair),
+  // non da dove puntano le ruote — in NO_BALL l'orbita è libera rispetto
+  // al movimento, altrimenti lo sweep poteva partire "di lato"
+  getAimYaw: () => cameraState.orbitYaw,
+})
+const {
+  triggerSteal: enemyTriggerSteal, triggerBlock: enemyTriggerBlock,
+  updateSteal: enemyUpdateSteal, updateBlock: enemyUpdateBlock,
+  canUseSteal: enemyCanUseSteal,
+} = initCombatMoves({
+  manipulator: enemyManipulator, otherManipulator: manipulator,
+  resetDribbleState: enemyResetDribbleState, otherResetDribbleState: resetDribbleState,
+  dribbleTuning, dribbleState: enemyDribbleState, getBasketball: () => basketball,
+  otherShootingState: shootingState, otherDashState: dashState, otherHandlingState: handlingState,
+  otherStealState: stealState, otherPickupState: pickupState, sfx,
+  stealState: enemyStealState, blockState: enemyBlockState, shootingState: enemyShootingState,
+  pickupState: enemyPickupState, handlingState: enemyHandlingState,
+})
+
+// tasti STEAL/BLOCK (solo Play E solo 1V1 — in PRACTICE non c'è nessun
+// avversario da derubare/bloccare; solo in NO_BALL, gate/cooldown gestiti
+// internamente da initCombatMoves — qui solo il trigger dell'input)
+document.addEventListener('keydown', e => {
+  if (menuState.mode !== 'play' || e.repeat || menuState.gameMode !== GameMode.ONE_V_ONE) return
+  if (e.code === 'KeyQ') triggerSteal()
+  else if (e.code === 'KeyE') triggerBlock()
+})
+
+// AI del nemico (src/EnemyAI.js): decide lo stato tattico (CHASE_BALL/
+// ATTACK/DEFEND/COVER) e pilota enemyManipulator ogni frame — le funzioni
+// di palleggio/tiro/STEAL/BLOCK sopra restano identiche a quelle del
+// giocatore, l'AI le aziona (setState/trigger dei tempi giusti) invece di
+// mouse/tastiera
+const { update: updateEnemyAI, resetWheelsAngle: resetEnemyWheelsAngle } = initEnemyAI({
+  enemyManipulator, playerManipulator: manipulator, getBasketball: () => basketball, collisionWorld,
+  enemyDribbleState, enemyHandlingState, enemyShootingState,
+  dribbleTuning, clearAllCollisionCooldowns: enemyClearAllCollisionCooldowns,
+  triggerSteal: enemyTriggerSteal, triggerBlock: enemyTriggerBlock,
+  targetHoopIndex: TEAM_HOOP_INDEX[Team.B],
+  playerTargetHoopIndex: TEAM_HOOP_INDEX[Team.A],
+  canUseSteal: enemyCanUseSteal,
+  getEffectiveShotSpeed: enemyGetEffectiveShotSpeed,
+  playerShootingState: shootingState,
+  enemyStealState, enemyBlockState,
 })
 
 // Pannello debug (tasto P): costruzione slider/readout in src/debugPanel.js
@@ -1096,6 +1388,10 @@ const {
 // principio di getBallRadius già in gameContext
 const { cameraPanel, updateReadouts } = initDebugPanel({
   ...gameContext,
+  // manipulator/dribbleState/pickupState non sono più in gameContext (sono
+  // per-robot dopo il refactor 1v1) — il pannello debug resta SOLO per il
+  // robot del giocatore, li passa espliciti qui
+  manipulator, dribbleState, pickupState,
   trajDebug, pickupMargin: PICKUP_MARGIN,
   setBallRadius: v => { BALL_RADIUS = v; if (basketball) basketball.scale.setScalar(v) },
   getHandlingHeightBoost: () => HANDLING_HEIGHT_BOOST,
@@ -1153,12 +1449,26 @@ function updateMenuCameraOrbit(delta) {
 // altri punti d'ingresso futuri, non ancora servite fuori da MainMenu.js stesso
 const { openPauseMenu } = initMainMenu({
   ...gameContext,
+  // manipulator/shootingState/handlingState/pickupState non sono più in
+  // gameContext (per-robot dopo il refactor 1v1) — il reset di
+  // BACK TO MAIN MENU riguarda solo il giocatore, passati espliciti qui
+  manipulator, shootingState, handlingState, pickupState,
+  stealState, blockState,
+  // il nemico va resettato insieme (posizione dal proprio lato, stato
+  // pulito) altrimenti BACK TO MAIN MENU → PRACTICE riparte con l'IA a
+  // metà tiro/palleggio di prima, o dalla parte sbagliata di campo
+  enemyManipulator, enemyShootingState, enemyHandlingState, enemyPickupState,
+  enemyStealState, enemyBlockState, enemyShotVelocity,
+  enemyResetDribbleState, enemyClearAllCollisionCooldowns, resetEnemyWheelsAngle,
   menuOverlayEl: document.getElementById('menu-overlay'),
-  hint, dashPanel, crosshair, modeIndicator,
+  hint, dashPanel, combatPanel, crosshair, modeIndicator,
+  scoreboardEl: document.getElementById('scoreboard'),
+  enemyScoreboardEl: document.getElementById('enemy-score-col'),
+  controlsHintEl: document.getElementById('controls-hint'),
   menuState,
-  applyTimeOfDayPreset, resetScore: resetShootingScore,
+  applyTimeOfDayPreset, resetScore: resetShootingScore, resetEnemyScore: resetEnemyShootingScore,
   renderer, sun, ssaoPass,
-  movementState, dashState,
+  movementState, dashState, dashMaxCharges: DASH_MAX_CHARGES,
   shotVelocity, ORBIT_PITCH_REST,
   resetDribbleState, clearAllCollisionCooldowns, hideTrajectoryPreview,
 })
@@ -1362,7 +1672,14 @@ function animate() {
     const isHandlingNow = manipulator.state === RobotState.HANDLING
     const armYawLerpFactor = 1 - Math.exp(-handlingTuning.transitionSpeed * delta)
     cameraState.currentArmYawOffsetDeg += ((isHandlingNow ? 0 : ARM_YAW_OFFSET_DEG) - cameraState.currentArmYawOffsetDeg) * armYawLerpFactor
-    manipulator.controls.setAimYaw(cameraState.orbitYaw + THREE.MathUtils.degToRad(cameraState.currentArmYawOffsetDeg))
+    // MAI durante il proprio STEAL/BLOCK: quel setAimYaw "vinceva" solo per
+    // un ordine di chiamata fortunato (updateSteal/updateBlock girano DOPO
+    // questo blocco nello stesso animate(), quindi lo sovrascrivevano) —
+    // un contratto implicito, non una vera protezione. Un domani riordino
+    // di animate() lo avrebbe rotto in silenzio
+    if (!isCombatMoveActive(stealState, blockState)) {
+      manipulator.controls.setAimYaw(cameraState.orbitYaw + THREE.MathUtils.degToRad(cameraState.currentArmYawOffsetDeg))
+    }
     // guardare su/giù (cameraState.orbitPitch) alza/abbassa di poco l'end effector,
     // ruotando il gomito e non l'ultimo link — coupling piccolo apposta.
     // setAimPitch gestisce internamente anche il rilivellamento della
@@ -1381,7 +1698,11 @@ function animate() {
     if (keys['KeyD']) moveVec.add(camRightFlat)
     if (keys['KeyA']) moveVec.sub(camRightFlat)
 
-    if (moveVec.lengthSq() > 0) {
+    // fermo durante il proprio STEAL/BLOCK (reach+resolve, 0.4-0.6s, non
+    // più istantaneo come prima) — camminare mentre il braccio sventola
+    // per conto suo sembrava un unico glitch, stessa correzione già
+    // applicata al movimento del nemico in EnemyAI.js
+    if (moveVec.lengthSq() > 0 && !isCombatMoveActive(stealState, blockState)) {
       moveVec.normalize()
       movementState.facing = Math.atan2(moveVec.x, moveVec.z)
       manipulator.move(moveVec, delta)
@@ -1389,14 +1710,47 @@ function animate() {
 
     // dash: scatto breve nella direzione di marcia, si somma al movimento
     // WASD normale se tenuto premuto durante il burst
-    if (dashState.cooldown > 0) dashState.cooldown = Math.max(0, dashState.cooldown - delta)
+    if (dashState.charges < DASH_MAX_CHARGES) {
+      dashState.rechargeTimer -= delta
+      if (dashState.rechargeTimer <= 0) {
+        dashState.charges++
+        // ricarica IN SEQUENZA: se resta ancora una carica da recuperare,
+        // il timer della PROSSIMA riparte subito, non in parallelo
+        dashState.rechargeTimer = dashState.charges < DASH_MAX_CHARGES ? DASH_COOLDOWN_TIME : 0
+      }
+    }
     if (dashState.timeRemaining > 0) {
-      manipulator.root.position.addScaledVector(dashDirection, manipulator.speed * DASH_SPEED_MULTIPLIER * delta)
+      // baseSpeed (non speed): il burst resta lo stesso anche se il dash
+      // scatta durante HANDLING, non va scalato dalla riduzione del 75%
+      manipulator.root.position.addScaledVector(dashDirection, manipulator.baseSpeed * DASH_SPEED_MULTIPLIER * delta)
       dashState.timeRemaining = Math.max(0, dashState.timeRemaining - delta)
     }
-    const dashReady = dashState.cooldown <= 0
-    dashBarFill.style.width = `${(1 - dashState.cooldown / DASH_COOLDOWN_TIME) * 100}%`
-    dashBarFill.classList.toggle('ready', dashReady)
+
+    // 2 blocchi indipendenti (stesso stile delle stat bar del menu): pieno/
+    // verde se quella carica è pronta, altrimenti la ricarica in corso
+    // riempie SOLO il primo blocco vuoto (le altre restano a 0%, in coda)
+    for (let i = 0; i < DASH_MAX_CHARGES; i++) {
+      const fillEl = dashChargeFillEls[i]
+      if (i < dashState.charges) {
+        fillEl.style.width = '100%'
+        fillEl.classList.add('ready')
+      } else if (i === dashState.charges) {
+        fillEl.style.width = `${(1 - dashState.rechargeTimer / DASH_COOLDOWN_TIME) * 100}%`
+        fillEl.classList.remove('ready')
+      } else {
+        fillEl.style.width = '0%'
+        fillEl.classList.remove('ready')
+      }
+    }
+
+    // STEAL/BLOCK: grigio/opaco l'intero pannello quando si ha la palla
+    // (le due mosse sono usabili SOLO in NO_BALL, non solo "fuori
+    // cooldown") — le barre dentro seguono lo stesso schema del dash
+    combatPanel.classList.toggle('disabled', manipulator.state !== RobotState.NO_BALL)
+    stealBarFill.style.width = `${(1 - stealState.cooldown / STEAL_COOLDOWN) * 100}%`
+    stealBarFill.classList.toggle('ready', canUseSteal())
+    blockBarFill.style.width = `${(1 - blockState.cooldown / BLOCK_COOLDOWN) * 100}%`
+    blockBarFill.classList.toggle('ready', canUseBlock())
 
     // il toro giace nel piano XY (asse/perno lungo Z), quindi la sua
     // direzione di rotolamento a riposo è l'asse X locale, non Z — va
@@ -1485,14 +1839,28 @@ function animate() {
   if (basketball && (shootingState.phase !== 'idle' || shootingState.stateTransitionTimer > 0)) updateShootAnimation(delta)
 
   if (basketball) {
-    // shootingState.released (non solo manipulator.state === NO_BALL): lo stato vero
-    // e proprio ora cambia con un piccolo ritardo dopo il rilascio (vedi
-    // shootTuning.stateTransitionDelay in updateShootAnimation) — il volo fisico
-    // della palla deve però partire SUBITO al rilascio, non aspettare
+    // shootingState.released, NON manipulator.state === NO_BALL da solo,
+    // decide se far girare la fisica del VOLO: in 1v1 un robot è NO_BALL
+    // anche solo perché la palla ce l'ha l'ALTRO, non perché ha tirato lui
+    // — updateShotFlight andrebbe comunque a muovere la basketball
+    // condivisa "a vuoto" (gravità applicata a uno shotVelocity mai
+    // impostato) se guardasse solo allo stato. checkForPickup() invece
+    // resta valido in ENTRAMBI i casi (mio tiro appena atterrato, o
+    // semplicemente senza palla in questo istante): un robot ball-less
+    // deve sempre poter raccogliere una palla libera, qualunque sia il motivo
     if (pickupState.phase === 'active') {
       updatePickup(delta)
-    } else if (manipulator.state === RobotState.NO_BALL || shootingState.released) {
+    } else if (shootingState.released && (!basketball.owner || basketball.owner === manipulator)) {
+      // basketball.owner check: se un BLOCK ha deviato il tiro E qualcun
+      // altro l'ha già raccolto (owner riassegnato altrove), questo NON è
+      // più "il mio tiro in volo" — continuare a chiamare updateShotFlight
+      // qui applicherebbe la fisica ABBANDONATA di questo robot sulla
+      // stessa basketball.position che il nuovo possessore sta già
+      // muovendo per conto suo: la palla "flickerava" tra le due,
+      // sembrando rimbalzare a terra invece di restare pulita in mano
       updateShotFlight(delta)
+      checkForPickup()
+    } else if (manipulator.state === RobotState.NO_BALL) {
       checkForPickup()
     } else if (shootingState.phase === 'idle') {
       if (manipulator.state === RobotState.HANDLING) {
@@ -1511,10 +1879,101 @@ function animate() {
         }
       }
     }
-    // dopo l'aggiornamento della palla per questo frame, qualunque stato
-    // l'abbia mossa — vedi commento su updateBallSpin sopra
-    updateBallSpin(delta)
   }
+
+  // PRACTICE è solo (nessun nemico: niente AI, niente STEAL/BLOCK, niente
+  // dispatch palleggio/tiro per enemyManipulator) — tutto quello che segue
+  // in questo blocco è specifico di 1V1
+  const isOneVOne = menuState.gameMode === GameMode.ONE_V_ONE
+  if (isOneVOne) {
+    // AI del nemico: decide movimento/stato PRIMA del dispatch qui sotto,
+    // così un cambio di stato deciso questo frame (es. entra in HANDLING)
+    // si riflette subito nello stesso frame invece di restare un frame indietro
+    if (basketball && menuState.mode === 'play') updateEnemyAI(delta)
+
+    // niente compenetrazione: chi ha la palla non cede MAI il passo, chi
+    // non ce l'ha viene spinto via se si avvicina troppo — dipende da chi
+    // possiede la palla in QUESTO istante (non un lato fisso): se il
+    // nemico ha la palla è lui a non cedere e tu vieni spinto, se sei tu
+    // ad averla è il nemico a cedere. Palla libera (nessun owner, es.
+    // durante un CHASE_BALL di entrambi): nessuno è "protetto", il
+    // giocatore cede come comportamento di default. Non dentro il
+    // movimento WASD/dash del giocatore (girava solo quando TI muovevi tu:
+    // se stavi fermo e l'altro ti veniva addosso, niente ti spingeva) ma
+    // QUI, ogni frame di Play, con le posizioni di ENTRAMBI già aggiornate
+    // per questo frame (il nemico si è appena mosso sopra)
+    if (menuState.mode === 'play' && basketball) {
+      const yieldingRobot = basketball.owner === manipulator ? enemyManipulator : manipulator
+      const holdingRobot = yieldingRobot === manipulator ? enemyManipulator : manipulator
+      scratchPlayerVsEnemy.subVectors(yieldingRobot.root.position, holdingRobot.root.position)
+      scratchPlayerVsEnemy.y = 0
+      // gate economico (nessuna radice) PRIMA di pagare .length(): nel caso
+      // comune (robot lontani) evita del tutto la radice quadrata, che
+      // altrimenti girava ogni frame di Play indipendentemente dalla distanza
+      const distSq = scratchPlayerVsEnemy.lengthSq()
+      if (distSq < AI_MIN_PLAYER_DISTANCE * AI_MIN_PLAYER_DISTANCE && distSq > 1) {
+        const dist = Math.sqrt(distSq)
+        // chi ha la palla non è più del tutto immune: assorbe solo il 25%
+        // della separazione necessaria, chi non ce l'ha (chi sta "venendo
+        // addosso") il restante 75% — non uno split fisso "sempre lui/
+        // sempre l'altro" come prima, entrambi si spostano un po'
+        const shortfall = AI_MIN_PLAYER_DISTANCE - dist
+        // divideScalar invece di normalize(): dist è già noto, normalize()
+        // ricalcolerebbe la stessa radice una seconda volta per niente
+        scratchPlayerVsEnemy.divideScalar(dist) // ora è la direzione holder → yielder
+        yieldingRobot.root.position.x += scratchPlayerVsEnemy.x * shortfall * 0.75
+        yieldingRobot.root.position.z += scratchPlayerVsEnemy.z * shortfall * 0.75
+        holdingRobot.root.position.x -= scratchPlayerVsEnemy.x * shortfall * 0.25
+        holdingRobot.root.position.z -= scratchPlayerVsEnemy.z * shortfall * 0.25
+      }
+    }
+
+    // STEAL/BLOCK: entrambi i robot (indipendenti da chi possiede la
+    // palla in questo istante — l'idle-check è interno a initCombatMoves)
+    if (basketball) {
+      updateSteal(delta)
+      updateBlock(delta)
+      enemyUpdateSteal(delta)
+      enemyUpdateBlock(delta)
+    }
+
+    // stesso identico dispatch del giocatore sopra, sul proprio set di
+    // stati indipendente (enemyManipulator/enemyPickupState/
+    // enemyShootingState) — basketball è condivisa, ma solo UNO dei due
+    // robot alla volta la possiede davvero (Basketball.owner), quindi solo
+    // uno dei due rami muove effettivamente la palla in un dato istante.
+    // Niente preview di traiettoria/mira per il nemico (non c'è una camera
+    // libera da inseguire, quella resta un concetto solo-giocatore)
+    if (basketball && (enemyShootingState.phase !== 'idle' || enemyShootingState.stateTransitionTimer > 0)) enemyUpdateShootAnimation(delta)
+
+    if (basketball) {
+      if (enemyPickupState.phase === 'active') {
+        enemyUpdatePickup(delta)
+      } else if (enemyShootingState.released && (!basketball.owner || basketball.owner === enemyManipulator)) {
+        enemyUpdateShotFlight(delta)
+        enemyCheckForPickup()
+      } else if (enemyManipulator.state === RobotState.NO_BALL) {
+        enemyCheckForPickup()
+      } else if (enemyShootingState.phase === 'idle') {
+        if (enemyManipulator.state === RobotState.HANDLING) {
+          enemyUpdateHandling(delta)
+        } else {
+          enemyDribbleAccumulator = Math.min(enemyDribbleAccumulator + delta, DRIBBLE_FIXED_DT * 10)
+          while (enemyDribbleAccumulator >= DRIBBLE_FIXED_DT) {
+            enemyUpdateDribble(DRIBBLE_FIXED_DT)
+            enemyDribbleAccumulator -= DRIBBLE_FIXED_DT
+          }
+        }
+      }
+    }
+  }
+  // PRACTICE: STEAL/BLOCK non hanno senso senza un avversario reale (il
+  // pannello combat-panel resta nascosto — vedi toggle su gameMode), niente
+  // da aggiornare qui
+
+  // dopo l'aggiornamento della palla per questo frame, qualunque stato
+  // (giocatore o nemico) l'abbia mossa — vedi commento su updateBallSpin sopra
+  if (basketball) updateBallSpin(delta)
 
   // preview di traiettoria: solo mentre si mira davvero (HANDLING, nessuna
   // animazione di tiro già in corso, palla non ancora rilasciata). Serve

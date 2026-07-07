@@ -33,6 +33,29 @@ const BOUNCE_CONTACT_ATTACK_TIME = 0.005
 const BOUNCE_CONTACT_PEAK_GAIN = 0.12
 const BOUNCE_CONTACT_DURATION = 0.04
 
+// playSteal: rumore bianco filtrato passa-banda, centro che SCENDE (opposto
+// di playShoot) — un "swipe" secco e breve, distinto dal "whoosh" del tiro
+const STEAL_FILTER_Q = 0.6
+const STEAL_FREQ_START = 1400
+const STEAL_FREQ_END = 350
+const STEAL_SWEEP_TIME = 0.12
+const STEAL_ATTACK_TIME = 0.01
+const STEAL_PEAK_GAIN = 0.16
+const STEAL_DURATION = 0.16
+
+// playBlock: "thwack" secco e basso — un colpo deciso, distinto sia dal
+// wsh discendente di playSteal sia dal thump morbido di playBounce
+const BLOCK_NOISE_LOWPASS_FREQ = 900
+const BLOCK_NOISE_ATTACK_TIME = 0.004
+const BLOCK_NOISE_PEAK_GAIN = 0.2
+const BLOCK_NOISE_DURATION = 0.1
+const BLOCK_TONE_FREQ_START = 220
+const BLOCK_TONE_FREQ_END = 90
+const BLOCK_TONE_SWEEP_TIME = 0.1
+const BLOCK_TONE_ATTACK_TIME = 0.005
+const BLOCK_TONE_PEAK_GAIN = 0.18
+const BLOCK_TONE_DURATION = 0.14
+
 // playShoot: rumore bianco filtrato passa-banda, centro che sale ("whoosh")
 const SHOOT_FILTER_Q = 0.5 // basso/banda larga: un Q alto suonava troppo "nasale"/fischiante
 const SHOOT_FREQ_START = 500
@@ -150,6 +173,60 @@ export class SoundEffects {
     gain.connect(this.listener.getInput())
     noise.start(t)
     noise.stop(t + SHOOT_DURATION)
+  }
+
+  // "swipe" secco per uno STEAL riuscito — stessa tecnica di playShoot
+  // (rumore bianco passa-banda) ma sweep discendente invece che ascendente
+  // e molto più breve, per non confonderlo col whoosh del tiro
+  playSteal() {
+    const ctx = this.listener.context
+    const t = ctx.currentTime
+    const noise = ctx.createBufferSource()
+    noise.buffer = this.noiseBuffer
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.Q.value = STEAL_FILTER_Q
+    filter.frequency.setValueAtTime(STEAL_FREQ_START, t)
+    filter.frequency.exponentialRampToValueAtTime(STEAL_FREQ_END, t + STEAL_SWEEP_TIME)
+    const gain = ctx.createGain()
+    this._applyEnvelope(gain, t, STEAL_PEAK_GAIN, STEAL_ATTACK_TIME, STEAL_DURATION)
+    noise.connect(filter)
+    filter.connect(gain)
+    gain.connect(this.listener.getInput())
+    noise.start(t)
+    noise.stop(t + STEAL_DURATION)
+  }
+
+  // "thwack" secco e basso per un BLOCK riuscito: rumore passa-basso
+  // (il colpo secco) + un tono grave discendente sotto (il "peso" della
+  // deviazione) — stessa idea di playBounce (corpo+contatto) ma più
+  // corto e deciso, per leggersi come un vero swat e non un rimbalzo
+  playBlock() {
+    const ctx = this.listener.context
+    const t = ctx.currentTime
+    const noise = ctx.createBufferSource()
+    noise.buffer = this.noiseBuffer
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.value = BLOCK_NOISE_LOWPASS_FREQ
+    const noiseGain = ctx.createGain()
+    this._applyEnvelope(noiseGain, t, BLOCK_NOISE_PEAK_GAIN, BLOCK_NOISE_ATTACK_TIME, BLOCK_NOISE_DURATION)
+    noise.connect(filter)
+    filter.connect(noiseGain)
+    noiseGain.connect(this.listener.getInput())
+    noise.start(t)
+    noise.stop(t + BLOCK_NOISE_DURATION)
+
+    const tone = ctx.createOscillator()
+    tone.type = 'sine'
+    tone.frequency.setValueAtTime(BLOCK_TONE_FREQ_START, t)
+    tone.frequency.exponentialRampToValueAtTime(BLOCK_TONE_FREQ_END, t + BLOCK_TONE_SWEEP_TIME)
+    const toneGain = ctx.createGain()
+    this._applyEnvelope(toneGain, t, BLOCK_TONE_PEAK_GAIN, BLOCK_TONE_ATTACK_TIME, BLOCK_TONE_DURATION)
+    tone.connect(toneGain)
+    toneGain.connect(this.listener.getInput())
+    tone.start(t)
+    tone.stop(t + BLOCK_TONE_DURATION)
   }
 
   setMasterVolume(value) {
