@@ -152,8 +152,13 @@ export function initMainMenu(ctx) {
   function showMenuScreen(id) {
     document.querySelectorAll('.menu-screen').forEach(el => el.classList.toggle('active', el.id === id))
     // l'anteprima robot (canvas live, palleggio animato) anima solo mentre
-    // la sua card è davvero visibile — niente sprecato sulle altre schermate
+    // la sua card è davvero visibile — niente sprecato sulle altre schermate.
+    // Due flag separati (non uno solo): con un flag unico per entrambe le
+    // schermate ROBOT/ROBOT AVVERSARIO, la preview NON visibile avrebbe
+    // comunque continuato a renderizzare in background ogni volta che
+    // l'altra è quella davvero mostrata
     menuState.robotPreviewActive = (id === 'menu-robot')
+    menuState.enemyRobotPreviewActive = (id === 'menu-robot-enemy')
   }
   document.querySelectorAll('[data-goto]').forEach(el => {
     el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
@@ -253,8 +258,28 @@ export function initMainMenu(ctx) {
 
   document.querySelectorAll('[data-robot]').forEach(el => {
     // solo MANIPULATOR è selezionabile per ora (le altre card non hanno
-    // data-robot, quindi questo querySelectorAll non le include nemmeno)
+    // data-robot, quindi questo querySelectorAll non le include nemmeno).
+    // In 1V1 c'è un secondo giro di scelta (l'avversario, stesso roster) —
+    // in PRACTICE non esiste alcun avversario, si salta diretti a TIMEOFDAY
+    el.addEventListener('click', () => {
+      showMenuScreen(menuState.gameMode === GameMode.ONE_V_ONE ? 'menu-robot-enemy' : 'menu-timeofday')
+    })
+  })
+
+  // stesso roster/stessa restrizione (solo MANIPULATOR selezionabile) della
+  // scelta del proprio robot sopra — per ora la scelta è cosmetica (l'unica
+  // classe reale è MANIPULATOR per entrambi), ma il flusso è già pronto per
+  // quando LEGGED MANIPULATOR/DRONE diventeranno giocabili (Section 4)
+  document.querySelectorAll('[data-robot-enemy]').forEach(el => {
     el.addEventListener('click', () => showMenuScreen('menu-timeofday'))
+  })
+
+  // il "back" da TIMEOFDAY deve tornare alla schermata di scelta robot
+  // giusta per la modalità corrente: ROBOT AVVERSARIO in 1V1 (l'ultimo
+  // passo prima di questa), ROBOT in PRACTICE (dove non esiste un giro
+  // avversario) — data-goto statico non basta, dipende da menuState.gameMode
+  document.getElementById('menu-timeofday-back-btn').addEventListener('click', () => {
+    showMenuScreen(menuState.gameMode === GameMode.ONE_V_ONE ? 'menu-robot-enemy' : 'menu-robot')
   })
 
   const timeOfDayCards = document.querySelectorAll('[data-timeofday]')

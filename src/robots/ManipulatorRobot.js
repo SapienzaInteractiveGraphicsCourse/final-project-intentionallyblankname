@@ -6,12 +6,14 @@ import { RobotBase } from './RobotBase.js'
 // altre): 1 = nessuna correzione, 3 = massima — forza del campo potenziale
 // attrattivo verso il centro canestro (vedi applyHoopAssist in main.js) —
 // non tocca la forza del tiro (quella resta costante/di zona), solo quanto
-// "aiuta" vicino al ferro
+// "aiuta" vicino al ferro. STEAL/BLOCK su scala 1-5 come SPEED: più alto
+// = cooldown più corto (vedi stealCooldownFor/blockCooldownFor in
+// CombatMoves.js — 11-STEAL e 7-BLOCK rispettivamente)
 // esportata (non solo locale): la card di selezione robot nel Main Menu
-// legge questi stessi valori per disegnare le barre a blocchi (SPEED su
-// scala 1-5, SHOOTING su scala 1-3) invece di averli ricopiati a mano
-// nell'HTML, che sarebbe potuto disallinearsi da questi
-export const MANIPULATOR_STATS = { speed: 3, shooting: 1 }
+// legge questi stessi valori per disegnare le barre a blocchi (SPEED/
+// STEAL/BLOCK su scala 1-5, SHOOTING su scala 1-3) invece di averli
+// ricopiati a mano nell'HTML, che sarebbe potuto disallinearsi da questi
+export const MANIPULATOR_STATS = { speed: 3, shooting: 1, steal: 3, block: 3 }
 
 export class ManipulatorRobot extends RobotBase {
   // team facoltativo (default undefined, retrocompatibile con la preview

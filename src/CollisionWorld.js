@@ -5,10 +5,12 @@ import * as THREE from 'three'
 // 'Torus_2_ring_0' (bounding box world ±43.75 in XZ, ±3.75 in Y attorno al
 // centro). RIM_RING_RADIUS esportata (non solo interna alla classe): serve
 // anche fuori, per il cono d'assistenza al canestro in main.js
-// (HOOP_ASSIST_BASE_RADIUS) — RIM_TUBE_RADIUS invece resta solo interna,
-// nessun altro file la importa davvero
+// (HOOP_ASSIST_BASE_RADIUS). RIM_TUBE_RADIUS esportata anch'essa: serve al
+// wireframe del ferro in CollisionDebugView.js, che deve disegnare lo
+// stesso identico torus usato dalla fisica, non una tube radius ricopiata
+// a mano che potrebbe disallinearsi
 export const RIM_RING_RADIUS = 40
-const RIM_TUBE_RADIUS = 4
+export const RIM_TUBE_RADIUS = 4
 
 // Wrapper OOP sopra le collisioni ambientali (backboard/ferro/muri/pali/
 // panchine): possiede gli array di geometria (estratti dagli accessor del

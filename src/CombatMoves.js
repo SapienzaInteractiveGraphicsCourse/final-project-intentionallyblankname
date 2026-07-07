@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { dribbleAmplitudesRad, snapBallToRestPoint, getObjectWorldPosition, resetToNeutralPossession } from './BallPossession.js'
+import { angleToForward } from './mathUtils.js'
 
 // STEAL e BLOCK: entrambe animazioni di "allungo" (flette link1, estende
 // elbow) via manipulator.controls.setDribbleOffsets — stessa API già usata
@@ -10,10 +11,14 @@ import { dribbleAmplitudesRad, snapBallToRestPoint, getObjectWorldPosition, rese
 // SOLO in RobotState.NO_BALL) da stare in un solo modulo invece di due
 // quasi identici.
 //
-// STEAL: successo se il ROBOT stealer entra nella bounding box
-// dell'avversario (espansa di un margine, non un punto preciso sulla
-// palla — "beccare una box del robot", molto più permissivo di un
-// contatto paletta-vs-palla) mentre la palla è HANDLED dall'AVVERSARIO —
+// STEAL: successo se il ROBOT stealer è abbastanza vicino al vero corpo
+// dell'avversario, con un margine ASIMMETRICO rispetto a dove sta
+// guardando/spazzando LO STEALER (resolveAimYaw) — ampio davanti (il vero
+// "allungo" del braccio, STEAL_FORWARD_MARGIN), quasi nullo alle spalle
+// (STEAL_BACKWARD_MARGIN, praticamente a corpo) — non un cubo uniforme
+// attorno all'avversario ("beccare una box del robot" indipendentemente
+// da dove si guarda sembrava innaturale, rubabile anche di spalle) mentre
+// la palla è HANDLED dall'AVVERSARIO —
 // possesso trasferito, l'avversario derubato passa a NO_BALL (senza
 // questo resterebbe in DRIBBLE con la palla ormai altrui, i due dispatch
 // in main.js finirebbero per contendersi la stessa basketball.position
@@ -24,12 +29,16 @@ import { dribbleAmplitudesRad, snapBallToRestPoint, getObjectWorldPosition, rese
 // viene solo deviato: la palla torna FREE (sganciata dal volo, "sporca",
 // riprendibile subito), niente canestro. L'arm (yaw base) punta dritto
 // verso la palla per tutta la reach, non una posa fissa.
+// cooldown dipendente dalla stat STEAL/BLOCK del robot che esegue la mossa
+// (scala 1-5, vedi MANIPULATOR_STATS in ManipulatorRobot.js) — più alto lo
+// stat, più corto il cooldown. Formula lineare scelta a mano: STEAL
+// 11-STEAL (1->10s, 3->8s, 5->6s, il vecchio fisso 10s era di fatto lo stat
+// minimo), BLOCK 7-BLOCK stessa forma, range più stretto perché il vecchio
+// fisso (5s) era già più basso di quello di STEAL.
 // esportate (non solo interne): main.js le usa per calcolare la percentuale
 // di riempimento delle barre HUD (stesso schema di DASH_COOLDOWN_TIME)
-// STEAL raddoppiato (5 -> 10s): a 5s i due robot si rubavano la palla a
-// vicenda quasi in loop continuo, senza mai una vera finestra per tirare
-export const STEAL_COOLDOWN = 10
-export const BLOCK_COOLDOWN = 5
+export function stealCooldownFor(stealStat) { return 11 - stealStat }
+export function blockCooldownFor(blockStat) { return 7 - blockStat }
 // appena derubati, niente steal-back immediato per un po' — senza,
 // chi non aveva mai usato STEAL prima (cooldown ancora a 0) poteva
 // rubarla indietro nello stesso istante
@@ -39,14 +48,21 @@ const BLOCK_REACH_DURATION = 0.375 // rallentata del 20% (velocità all'80% di q
 // tempo di rientro della posa (allungo → neutro) dopo successo O fallimento
 // — stesso principio del "tuffo" del pickup: mai uno scatto secco
 const RESOLVE_DURATION = 0.2
-// margine oltre la vera bounding box dell'avversario entro cui STEAL
-// scatta — un bersaglio "box", non un punto preciso sulla palla
-const STEAL_BOX_MARGIN = 90
+// margine di reach ASIMMETRICO oltre il vero corpo dell'avversario entro
+// cui STEAL scatta, relativo a dove sta guardando/spazzando CHI RUBA
+// (resolveAimYaw, non l'avversario): FORWARD è il vero "allungo" davanti
+// (dove punta/spazza il braccio), BACKWARD è il margine alle spalle dello
+// stealer — quasi a zero apposta, praticamente serve il corpo vero per
+// rubare da lì. Esportate insieme a BLOCK_CONTACT_RADIUS: CollisionDebugView.js
+// le disegna come wireframe (tasti 6/7) per poterle ispezionare a occhio,
+// stessi identici valori usati qui per la logica vera
+export const STEAL_FORWARD_MARGIN = 90
+export const STEAL_BACKWARD_MARGIN = 20
 // raggio di contatto paletta-palla per BLOCK (bersaglio in volo, un po'
 // permissivo — tiro veloce, non c'è tempo di essere precisi). Ridotto da
 // 100: a quel raggio si veniva bloccati anche da distanze visivamente
 // assurde, molto oltre la reale portata del braccio
-const BLOCK_CONTACT_RADIUS = 55
+export const BLOCK_CONTACT_RADIUS = 55
 const STEAL_ELBOW_DEG = -70
 const STEAL_LINK1_DEG = 50
 const STEAL_SWEEP_AMPLITUDE_DEG = 50 // ampiezza dello spazzolamento base, da -X a +X gradi attorno alla direzione attuale
@@ -93,12 +109,30 @@ export function initCombatMoves(ctx) {
   } = ctx
 
   const scratchOpponentBox = new THREE.Box3()
-  // bersaglio "box", non un punto preciso sulla palla — molto più
-  // permissivo, matcha l'ask esplicita ("beccare una box del robot")
+  const scratchNearestOnOpponent = new THREE.Vector3()
+  const scratchStealDelta = new THREE.Vector3()
+  const scratchStealForward = new THREE.Vector3()
+  // bersaglio: il vero corpo dell'avversario (bounding box reale, non
+  // espansa a caso), con un margine di reach oltre la superficie che
+  // dipende da dove sta guardando/spazzando LO STEALER — pieno
+  // (STEAL_FORWARD_MARGIN) davanti a sé, quasi nullo (STEAL_BACKWARD_MARGIN)
+  // alle proprie spalle. Interpolato con dot/coseno (non uno split netto
+  // avanti/dietro): il margine scende con continuità man mano che
+  // l'avversario si sposta lateralmente, invece di uno scatto secco al
+  // superamento dei 90°
   function isTouchingOpponentBox() {
     scratchOpponentBox.setFromObject(otherManipulator.root)
-    scratchOpponentBox.expandByScalar(STEAL_BOX_MARGIN)
-    return scratchOpponentBox.containsPoint(manipulator.root.position)
+    scratchOpponentBox.clampPoint(manipulator.root.position, scratchNearestOnOpponent)
+    scratchStealDelta.subVectors(scratchNearestOnOpponent, manipulator.root.position)
+    scratchStealDelta.y = 0
+    const dist = scratchStealDelta.length()
+    if (dist < 1e-4) return true // già dentro il vero corpo dell'avversario
+    angleToForward(resolveAimYaw(), scratchStealForward)
+    const forwardAmount = scratchStealDelta.dot(scratchStealForward) / dist // coseno dell'angolo, [-1,1]
+    const margin = forwardAmount > 0
+      ? THREE.MathUtils.lerp(STEAL_BACKWARD_MARGIN, STEAL_FORWARD_MARGIN, forwardAmount)
+      : STEAL_BACKWARD_MARGIN
+    return dist <= margin
   }
 
   // condizione di rubabilità (NON include isTouchingOpponentBox — quello
@@ -291,8 +325,8 @@ export function initCombatMoves(ctx) {
             otherHandlingState.tiltOffset = 0
             otherManipulator.controls.setGrip(0)
             // lockout anti-steal-back: appena derubato, 2s prima di poter
-            // ritentare uno STEAL — senza, con STEAL_COOLDOWN a 0 (mai
-            // usato prima) poteva rubarla indietro nello stesso istante
+            // ritentare uno STEAL — senza, con cooldown a 0 (mai usato
+            // prima) poteva rubarla indietro nello stesso istante
             otherStealState.cooldown = Math.max(otherStealState.cooldown, VICTIM_STEAL_LOCKOUT)
             sfx.playSteal()
           }
@@ -320,7 +354,7 @@ export function initCombatMoves(ctx) {
       manipulator.controls.setAimYaw(THREE.MathUtils.lerp(stealState.resolveFromAimYaw, resolveAimYaw(), t))
       if (t >= 1) {
         stealState.phase = 'idle'
-        stealState.cooldown = STEAL_COOLDOWN
+        stealState.cooldown = stealCooldownFor(manipulator.stats.steal)
         finishResolve()
       }
     }
@@ -363,7 +397,7 @@ export function initCombatMoves(ctx) {
       )
       if (t >= 1) {
         blockState.phase = 'idle'
-        blockState.cooldown = BLOCK_COOLDOWN
+        blockState.cooldown = blockCooldownFor(manipulator.stats.block)
         // BLOCK non tocca mai il possesso di questo robot (era già NO_BALL
         // prima e resta NO_BALL dopo), niente finishResolve() qui
       }

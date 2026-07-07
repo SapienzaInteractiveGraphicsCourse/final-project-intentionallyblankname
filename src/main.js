@@ -14,14 +14,15 @@ import { Basketball, BallState } from './Basketball.js'
 import { GameMode } from './GameMode.js'
 import { TimeOfDay } from './TimeOfDay.js'
 import { SoundEffects } from './SoundEffects.js'
-import { CollisionWorld, RIM_RING_RADIUS } from './CollisionWorld.js'
+import { CollisionWorld, RIM_RING_RADIUS, RIM_TUBE_RADIUS } from './CollisionWorld.js'
 import { initMainMenu } from './MainMenu.js'
 import { angleToForward, rotateRight, lerpAngle } from './mathUtils.js'
 import { initBallPossession, stepDribble, dribbleAmplitudesRad, getObjectWorldPosition } from './BallPossession.js'
 import { initShootingSystem } from './ShootingSystem.js'
 import { initEnemyAI, AI_MIN_PLAYER_DISTANCE } from './EnemyAI.js'
-import { initCombatMoves, STEAL_COOLDOWN, BLOCK_COOLDOWN, isCombatMoveActive } from './CombatMoves.js'
+import { initCombatMoves, stealCooldownFor, blockCooldownFor, isCombatMoveActive, STEAL_FORWARD_MARGIN, STEAL_BACKWARD_MARGIN, BLOCK_CONTACT_RADIUS } from './CombatMoves.js'
 import { initDebugPanel } from './debugPanel.js'
+import { initCollisionDebugView } from './CollisionDebugView.js'
 import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX, BALL_GRAVITY } from './constants.js'
 
 // --- Renderer ---
@@ -876,12 +877,18 @@ document.addEventListener('mousedown', e => {
   // faceva entrare in HANDLING anche senza possederla davvero (bug visibile
   // soprattutto dopo un contatto/steal dell'avversario)
   if (!basketball || basketball.state !== BallState.HANDLED || basketball.owner !== manipulator) return
-  // la mira riparte da un pitch fisso e sensato invece di quello che si
-  // aveva in DRIBBLE (che potrebbe essere un estremo, tipo guardando giù) —
-  // il salto si vede scorrere comunque: camera.quaternion.slerp verso il
-  // bersaglio (vedi animate()) è l'UNICO stadio di smoothing sulla rotazione,
-  // niente doppio lerp in cascata qui sopra
-  cameraState.orbitPitch = ORBIT_PITCH_REST
+  // cameraState.orbitPitch/orbitYaw NON vengono toccati qui: un tempo si
+  // forzava orbitPitch a ORBIT_PITCH_REST all'ingresso in HANDLING, ma
+  // questo scartava il punto che si stava mirando in DRIBBLE — il
+  // crosshair saltava a puntare altrove (es. il pavimento) appena si
+  // teneva il tasto destro. Il range pitch di HANDLING ([-0.9, 0.9], vedi
+  // ORBIT_PITCH_MIN_HANDLING/MAX_HANDLING) contiene per intero quello di
+  // DRIBBLE ([0.05, 0.9]), quindi non serve nessun clamp: lasciando
+  // orbitPitch/orbitYaw invariati la DIREZIONE di mira resta esattamente
+  // continua nella transizione (le due formule coincidono per lo stesso
+  // yaw/pitch, vedi HANDLING_CAMERA_SIDE_OFFSET sopra) — solo la
+  // POSIZIONE della camera si sposta, e quella è già interpolata sotto
+  // (camera.position.lerp/quaternion.slerp in animate())
   manipulator.setState(RobotState.HANDLING)
   // altrimenti resterebbe bloccato a true per sempre dopo il primo tiro,
   // impedendo alla preview di traiettoria di riapparire quando si riafferra
@@ -961,6 +968,25 @@ const PICKUP_MARGIN = 40
 // permettersi un tuffo più leggibile, rapido ma non istantaneo
 const PICKUP_DURATION = 0.3
 const pickupState = { phase: 'idle', phaseT: 0 } // phase: 'idle' | 'active'
+
+// wireframe di ispezione per i volumi di collisione/contatto (tasti
+// numerici 1-8, vedi CollisionDebugView.js) — pensato per VEDERE le forme
+// (backboard/ferro/muri/pali/panchine/zone STEAL-BLOCK-PICKUP) invece di
+// leggerne solo i parametri nel pannello debug (tasto P). Costruito qui,
+// non prima: serve collisionWorld (sopra) + manipulator/enemyManipulator
+// (sopra) + PICKUP_MARGIN appena dichiarata
+const { update: updateCollisionDebugView } = initCollisionDebugView({
+  scene, collisionWorld, rimRingRadius: RIM_RING_RADIUS, rimTubeRadius: RIM_TUBE_RADIUS,
+  manipulator, enemyManipulator, getBasketball: () => basketball,
+  // stessa identica fonte di "dove sta guardando" usata da CombatMoves.js
+  // (resolveAimYaw): il giocatore la camera/crosshair, il nemico le ruote
+  // (niente camera) — la zona STEAL disegnata deve orientarsi esattamente
+  // come quella vera, non una approssimazione a parte
+  getPlayerAimYaw: () => cameraState.orbitYaw,
+  getEnemyAimYaw: () => enemyManipulator.wheelsGroup.rotation.y,
+  stealForwardMargin: STEAL_FORWARD_MARGIN, stealBackwardMargin: STEAL_BACKWARD_MARGIN,
+  blockContactRadius: BLOCK_CONTACT_RADIUS, pickupMargin: PICKUP_MARGIN,
+})
 
 document.addEventListener('mousedown', e => {
   if (e.button !== 0 || menuState.mode !== 'play' || !controls.isLocked) return
@@ -1481,9 +1507,16 @@ const { openPauseMenu } = initMainMenu({
 // della prima versione (un render singolo → PNG statico), qui il
 // renderer resta vivo e il canvas stesso finisce nella card: il robot
 // palleggia davvero (stessa API controls.setDribbleOffsets del palleggio
-// vero), animato finché la schermata ROBOT è quella attiva
+// vero), animato finché la sua schermata è quella attiva.
+// Parametrizzata su (targetElementId, activeFlagKey) e chiamata due volte
+// sotto — una per la card ROBOT (giocatore), una per ROBOT AVVERSARIO
+// (1V1, vedi MainMenu.js): stesso identico setup, un renderer/scena/robot
+// indipendente ciascuna (costo di setup pagato una sola volta all'avvio
+// del menu, non un hot path), gating separato così la preview non visibile
+// non continua a renderizzare in background
 menuState.robotPreviewActive = false
-function renderRobotCardPreview() {
+menuState.enemyRobotPreviewActive = false
+function renderRobotCardPreview(targetElementId, activeFlagKey) {
   const previewSize = 200
   const previewRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
   previewRenderer.setSize(previewSize, previewSize)
@@ -1544,7 +1577,7 @@ function renderRobotCardPreview() {
   previewCamera.position.copy(center).addScaledVector(viewDir, distance)
   previewCamera.lookAt(center)
 
-  document.getElementById('robot-preview-manipulator').replaceChildren(previewRenderer.domElement)
+  document.getElementById(targetElementId).replaceChildren(previewRenderer.domElement)
 
   // palleggio della preview: chiama stepDribble, la STESSA identica
   // funzione/simulazione del palleggio automatico vero (vedi sopra, non
@@ -1560,22 +1593,24 @@ function renderRobotCardPreview() {
 
   function tickPreview() {
     requestAnimationFrame(tickPreview)
-    if (!menuState.robotPreviewActive) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
+    if (!menuState[activeFlagKey]) { previewClock.getDelta(); return } // consuma il delta senza animare, niente salto al rientro
     const dt = Math.min(previewClock.getDelta(), MAX_DELTA)
     stepDribble(previewDribbleState, previewRobot, previewBall.position, dt, { dribbleTuning, ballRadius: BALL_RADIUS })
     previewRenderer.render(previewScene, previewCamera)
   }
   tickPreview()
 }
-renderRobotCardPreview()
+renderRobotCardPreview('robot-preview-manipulator', 'robotPreviewActive')
+renderRobotCardPreview('robot-preview-manipulator-enemy', 'enemyRobotPreviewActive')
 
 // barre a blocchi delle stat sulla card robot (Main Menu → ROBOT): letture
 // dirette da MANIPULATOR_STATS (src/robots/ManipulatorRobot.js), non valori
 // ricopiati a mano nell'HTML — se una stat cambia in futuro la card resta
 // allineata da sola. maxByStat riflette le scale reali usate altrove nel
-// codice (SPEED 1-5, SHOOTING 1-3 — vedi ManipulatorRobot.js/applyHoopAssist)
+// codice (SPEED/STEAL/BLOCK 1-5, SHOOTING 1-3 — vedi ManipulatorRobot.js/
+// applyHoopAssist/CombatMoves.js)
 function renderStatBars(containerEl, stats) {
-  const maxByStat = { speed: 5, shooting: 3 }
+  const maxByStat = { speed: 5, shooting: 3, steal: 5, block: 5 }
   containerEl.replaceChildren(...Object.entries(stats).map(([key, value]) => {
     const max = maxByStat[key] ?? value
     const row = document.createElement('div')
@@ -1595,6 +1630,22 @@ function renderStatBars(containerEl, stats) {
   }))
 }
 renderStatBars(document.getElementById('robot-stats-manipulator'), MANIPULATOR_STATS)
+
+// LEGGED MANIPULATOR/DRONE: stat di roster per le card disabilitate del
+// Main Menu (Section 4, ancora nessuna factory/classe reale — solo il
+// numero da mostrare in anteprima) — non esiste ancora un
+// LeggedManipulatorRobot.js/DroneRobot.js da cui importarle come per
+// MANIPULATOR_STATS, quindi restano locali qui finché quelle classi non
+// verranno implementate
+const LEGGED_MANIPULATOR_STATS = { speed: 2, shooting: 3, steal: 2, block: 5 }
+const DRONE_STATS = { speed: 5, shooting: 2, steal: 1, block: 1 }
+renderStatBars(document.getElementById('robot-stats-legged'), LEGGED_MANIPULATOR_STATS)
+renderStatBars(document.getElementById('robot-stats-drone'), DRONE_STATS)
+// stesse identiche stat sulla schermata ROBOT AVVERSARIO (1V1, vedi
+// MainMenu.js) — non un roster separato, lo stesso identico per entrambi
+renderStatBars(document.getElementById('robot-stats-manipulator-enemy'), MANIPULATOR_STATS)
+renderStatBars(document.getElementById('robot-stats-legged-enemy'), LEGGED_MANIPULATOR_STATS)
+renderStatBars(document.getElementById('robot-stats-drone-enemy'), DRONE_STATS)
 
 // Rotazione del pallone: dedotta dalla velocità REALE (differenza di
 // posizione frame-su-frame), non simulata separatamente per ogni stato
@@ -1635,6 +1686,36 @@ function updateBallSpin(dt) {
   if (axisLength < 1e-4) return // nessun asse di rotolamento orizzontale sensato
   ballSpinAxis.divideScalar(axisLength)
   basketball.mesh.rotateOnWorldAxis(ballSpinAxis, (speed / BALL_RADIUS) * dt)
+}
+
+// Il robot (giocatore E nemico) non ha MAI avuto un clamp contro la
+// geometria statica del campo (muri/pali/panchine/backboard) — solo la
+// PALLA viene risolta contro collisionWorld (vedi stepShotFlight/
+// updateTrajectoryPreview in ShootingSystem.js). Camminare piano contro un
+// muro/palo si nota a malapena (il robot resta visibilmente "incastrato" e
+// basta), ma un DASH (6.6x velocità, nessun collision check) può spingere
+// il robot ben oltre un palo/panchina sottile in un solo burst — e la
+// palla, che segue sempre la posizione REALE della paletta fino al
+// rilascio (snapBallToRestPoint), parte quindi già conficcata in quel box.
+// Il primo sotto-passo di stepShotFlight la trova già dentro
+// (containsPoint vero al frame 0 del volo) e la risolve SUBITO con un
+// rimbalzo sulla faccia più vicina — un tiro che in realtà non ha mai
+// toccato niente sembra un'accelerazione/collisione impazzita in
+// partenza. Fix: stesso identico test sfera-vs-box già usato per la palla
+// (collisionWorld.resolveSphereBoxCollision), applicato anche al ROBOT
+// ogni frame subito dopo il movimento — velocità fittizia sempre a zero
+// (il dot product con una normale non è mai negativo, quindi non viene
+// mai mutata): serve solo la correzione di POSIZIONE, il robot non ha un
+// vettore velocità persistente da riflettere come un vero rimbalzo
+const PLAYER_COLLISION_RADIUS = 55 // ~ raggio del disco (discRadius=1 × manipulatorScale=45) + margine
+const scratchRobotClampVelocity = new THREE.Vector3()
+function clampRobotToCourt(robot) {
+  const pos = robot.root.position
+  scratchRobotClampVelocity.set(0, 0, 0)
+  for (const box of collisionWorld.backboardBoxes) collisionWorld.resolveSphereBoxCollision(pos, scratchRobotClampVelocity, box, PLAYER_COLLISION_RADIUS, 0)
+  for (const box of collisionWorld.wallBoxes) collisionWorld.resolveSphereBoxCollision(pos, scratchRobotClampVelocity, box, PLAYER_COLLISION_RADIUS, 0)
+  for (const box of collisionWorld.poleBoxes) collisionWorld.resolveSphereBoxCollision(pos, scratchRobotClampVelocity, box, PLAYER_COLLISION_RADIUS, 0)
+  for (const box of collisionWorld.benchBoxes) collisionWorld.resolveSphereBoxCollision(pos, scratchRobotClampVelocity, box, PLAYER_COLLISION_RADIUS, 0)
 }
 
 function animate() {
@@ -1725,6 +1806,9 @@ function animate() {
       manipulator.root.position.addScaledVector(dashDirection, manipulator.baseSpeed * DASH_SPEED_MULTIPLIER * delta)
       dashState.timeRemaining = Math.max(0, dashState.timeRemaining - delta)
     }
+    // DOPO sia WASD sia dash: vedi clampRobotToCourt sopra, il motivo per
+    // cui serve è tutto lì (il dash è il caso che lo rende visibile)
+    clampRobotToCourt(manipulator)
 
     // 2 blocchi indipendenti (stesso stile delle stat bar del menu): pieno/
     // verde se quella carica è pronta, altrimenti la ricarica in corso
@@ -1747,9 +1831,9 @@ function animate() {
     // (le due mosse sono usabili SOLO in NO_BALL, non solo "fuori
     // cooldown") — le barre dentro seguono lo stesso schema del dash
     combatPanel.classList.toggle('disabled', manipulator.state !== RobotState.NO_BALL)
-    stealBarFill.style.width = `${(1 - stealState.cooldown / STEAL_COOLDOWN) * 100}%`
+    stealBarFill.style.width = `${(1 - stealState.cooldown / stealCooldownFor(manipulator.stats.steal)) * 100}%`
     stealBarFill.classList.toggle('ready', canUseSteal())
-    blockBarFill.style.width = `${(1 - blockState.cooldown / BLOCK_COOLDOWN) * 100}%`
+    blockBarFill.style.width = `${(1 - blockState.cooldown / blockCooldownFor(manipulator.stats.block)) * 100}%`
     blockBarFill.classList.toggle('ready', canUseBlock())
 
     // il toro giace nel piano XY (asse/perno lungo Z), quindi la sua
@@ -1890,6 +1974,10 @@ function animate() {
     // così un cambio di stato deciso questo frame (es. entra in HANDLING)
     // si riflette subito nello stesso frame invece di restare un frame indietro
     if (basketball && menuState.mode === 'play') updateEnemyAI(delta)
+    // stesso clamp del giocatore (vedi clampRobotToCourt sopra) — l'AI
+    // naviga verso punti target senza sapere nulla di muri/pali/panchine,
+    // quindi è altrettanto esposta a finire dentro quella geometria
+    clampRobotToCourt(enemyManipulator)
 
     // niente compenetrazione: chi ha la palla non cede MAI il passo, chi
     // non ce l'ha viene spinto via se si avvicina troppo — dipende da chi
@@ -1916,15 +2004,29 @@ function animate() {
         // chi ha la palla non è più del tutto immune: assorbe solo il 25%
         // della separazione necessaria, chi non ce l'ha (chi sta "venendo
         // addosso") il restante 75% — non uno split fisso "sempre lui/
-        // sempre l'altro" come prima, entrambi si spostano un po'
+        // sempre l'altro" come prima, entrambi si spostano un po'.
+        // ECCEZIONE: chi sta eseguendo il PROPRIO tiro (shootingState/
+        // enemyShootingState !== 'idle', quindi anche durante 'recover',
+        // non solo windup/release) non viene MAI spostato da questa
+        // correzione — root.position pilota anche la chase camera, quindi
+        // un nemico semplicemente VICINO (nessun contatto vero, e senza
+        // alcuna dipendenza da davanti/dietro: è solo un check di distanza)
+        // faceva slittare il crosshair proprio nell'istante del rilascio.
+        // L'altro robot assorbe per intero lo shortfall in quel caso
         const shortfall = AI_MIN_PLAYER_DISTANCE - dist
         // divideScalar invece di normalize(): dist è già noto, normalize()
         // ricalcolerebbe la stessa radice una seconda volta per niente
         scratchPlayerVsEnemy.divideScalar(dist) // ora è la direzione holder → yielder
-        yieldingRobot.root.position.x += scratchPlayerVsEnemy.x * shortfall * 0.75
-        yieldingRobot.root.position.z += scratchPlayerVsEnemy.z * shortfall * 0.75
-        holdingRobot.root.position.x -= scratchPlayerVsEnemy.x * shortfall * 0.25
-        holdingRobot.root.position.z -= scratchPlayerVsEnemy.z * shortfall * 0.25
+        const playerShooting = shootingState.phase !== 'idle'
+        const enemyShooting = enemyShootingState.phase !== 'idle'
+        const holdingIsShooting = (holdingRobot === manipulator && playerShooting) || (holdingRobot === enemyManipulator && enemyShooting)
+        const yieldingIsShooting = (yieldingRobot === manipulator && playerShooting) || (yieldingRobot === enemyManipulator && enemyShooting)
+        const yielderShare = yieldingIsShooting ? 0 : (holdingIsShooting ? 1 : 0.75)
+        const holderShare = holdingIsShooting ? 0 : (yieldingIsShooting ? 1 : 0.25)
+        yieldingRobot.root.position.x += scratchPlayerVsEnemy.x * shortfall * yielderShare
+        yieldingRobot.root.position.z += scratchPlayerVsEnemy.z * shortfall * yielderShare
+        holdingRobot.root.position.x -= scratchPlayerVsEnemy.x * shortfall * holderShare
+        holdingRobot.root.position.z -= scratchPlayerVsEnemy.z * shortfall * holderShare
       }
     }
 
@@ -1989,6 +2091,8 @@ function animate() {
   if (!cameraPanel.classList.contains('hidden')) {
     updateReadouts()
   }
+
+  updateCollisionDebugView()
 
   composer.render()
 }

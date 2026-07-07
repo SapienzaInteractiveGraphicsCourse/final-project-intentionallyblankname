@@ -466,12 +466,17 @@
       background: rgba(255, 255, 255, 0.12);
       border: 1px solid rgba(255, 255, 255, 0.18);
     }
-    /* verde, non l'arancione del resto del tema — coerente col colore
-       "canestro/verde" già usato altrove (preview di traiettoria) */
     .stat-block.filled {
-      background: #43a047;
-      border-color: #43a047;
-      box-shadow: 0 0 6px rgba(67, 160, 71, 0.6);
+      background: var(--ui-orange);
+      border-color: var(--ui-orange);
+      box-shadow: 0 0 6px rgba(255, 138, 30, 0.6);
+    }
+    .card-special {
+      margin-top: 8px;
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.5px;
+      color: var(--ui-orange-dim);
     }
     .menu-back {
       background: none;
@@ -528,7 +533,6 @@
       <div class="menu-btn-list">
         <button class="menu-btn" data-gamemode="practice">PRACTICE</button>
         <button class="menu-btn" data-gamemode="1v1">1V1</button>
-        <button class="menu-btn" disabled>3V3<span class="tag">IN ARRIVO</span></button>
       </div>
       <button class="menu-back" data-goto="menu-main">← indietro</button>
     </div>
@@ -541,19 +545,52 @@
           <div class="card-title">MOBILE MANIPULATOR</div>
           <div class="card-sub">Ruote · Bilanciato</div>
           <div class="card-stats" id="robot-stats-manipulator"></div>
+          <div class="card-special">MOSSA: DASH (x2)</div>
         </div>
         <div class="menu-card disabled">
           <div class="card-icon">?</div>
           <div class="card-title">LEGGED MANIPULATOR</div>
           <div class="card-sub">In arrivo</div>
+          <div class="card-stats" id="robot-stats-legged"></div>
+          <div class="card-special">MOSSA: JUMP</div>
         </div>
         <div class="menu-card disabled">
           <div class="card-icon">?</div>
           <div class="card-title">DRONE</div>
           <div class="card-sub">In arrivo</div>
+          <div class="card-stats" id="robot-stats-drone"></div>
+          <div class="card-special">MOSSA: HIGH GROUND</div>
         </div>
       </div>
       <button class="menu-back" data-goto="menu-gamemodes">← indietro</button>
+    </div>
+
+    <div id="menu-robot-enemy" class="menu-screen">
+      <div class="menu-title">SCEGLI IL ROBOT AVVERSARIO</div>
+      <div class="menu-card-grid">
+        <div class="menu-card" data-robot-enemy="manipulator">
+          <div class="card-icon" id="robot-preview-manipulator-enemy"></div>
+          <div class="card-title">MOBILE MANIPULATOR</div>
+          <div class="card-sub">Ruote · Bilanciato</div>
+          <div class="card-stats" id="robot-stats-manipulator-enemy"></div>
+          <div class="card-special">MOSSA: DASH (x2)</div>
+        </div>
+        <div class="menu-card disabled">
+          <div class="card-icon">?</div>
+          <div class="card-title">LEGGED MANIPULATOR</div>
+          <div class="card-sub">In arrivo</div>
+          <div class="card-stats" id="robot-stats-legged-enemy"></div>
+          <div class="card-special">MOSSA: JUMP</div>
+        </div>
+        <div class="menu-card disabled">
+          <div class="card-icon">?</div>
+          <div class="card-title">DRONE</div>
+          <div class="card-sub">In arrivo</div>
+          <div class="card-stats" id="robot-stats-drone-enemy"></div>
+          <div class="card-special">MOSSA: HIGH GROUND</div>
+        </div>
+      </div>
+      <button class="menu-back" data-goto="menu-robot">← indietro</button>
     </div>
 
     <div id="menu-timeofday" class="menu-screen">
@@ -565,7 +602,7 @@
         <div class="menu-card" data-timeofday="night"><div class="card-title">NIGHT</div></div>
       </div>
       <button class="menu-btn hidden" id="menu-start-btn">START</button>
-      <button class="menu-back" data-goto="menu-robot">← indietro</button>
+      <button class="menu-back" id="menu-timeofday-back-btn">← indietro</button>
     </div>
 
     <div id="menu-pause" class="menu-screen">
