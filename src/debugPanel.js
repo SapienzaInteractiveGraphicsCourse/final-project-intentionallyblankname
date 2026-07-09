@@ -70,13 +70,13 @@ export function initDebugPanel(ctx) {
     { name: 'Base Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link2Thickness, onChange: manipulator.controls.link2Thickness },
     { name: 'Tip Thickness', min: 0.02, max: 1, step: 0.01, value: cfg.link2TipThickness, onChange: manipulator.controls.link2TipThickness },
   ])
-  addComponentSection(manipulatorConfig, 'Base Joint (sfera)', [
+  addComponentSection(manipulatorConfig, 'Base Joint (sphere)', [
     { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.baseJointScale, onChange: manipulator.controls.baseJointScale },
   ])
-  addComponentSection(manipulatorConfig, 'Elbow Joint (sfera)', [
+  addComponentSection(manipulatorConfig, 'Elbow Joint (sphere)', [
     { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.elbowJointScale, onChange: manipulator.controls.elbowJointScale },
   ])
-  addComponentSection(manipulatorConfig, 'End Effector (sfera)', [
+  addComponentSection(manipulatorConfig, 'End Effector (sphere)', [
     { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.endEffectorScale, onChange: manipulator.controls.endEffectorScale },
   ])
   addComponentSection(manipulatorConfig, 'Paddle (V)', [
@@ -110,7 +110,7 @@ export function initDebugPanel(ctx) {
     { name: 'Shot Speed', min: 100, max: 2500, step: 10, value: shootTuning.shotSpeed, onChange: v => { shootTuning.shotSpeed = v } },
     { name: 'State Transition Delay (s)', min: 0, max: 1, step: 0.05, value: shootTuning.stateTransitionDelay, onChange: v => { shootTuning.stateTransitionDelay = v } },
   ])
-  addComponentSection(manipulatorAnimation, 'Handling (tasto destro)', [
+  addComponentSection(manipulatorAnimation, 'Handling (right-click held)', [
     { name: 'Arm Ease', min: -1, max: 1, step: 0.02, value: handlingTuning.ease, onChange: v => { handlingTuning.ease = v } },
     { name: 'Grip Angle (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: handlingTuning.gripOffset, onChange: v => { handlingTuning.gripOffset = v } },
     { name: 'Transition Speed', min: 1, max: 30, step: 1, value: handlingTuning.transitionSpeed, onChange: v => { handlingTuning.transitionSpeed = v } },
@@ -128,7 +128,7 @@ export function initDebugPanel(ctx) {
   createSliderControl(basketballConfig, {
     name: 'Scale', min: 5, max: 40, step: 1, value: getBallRadius(), onChange: setBallRadius,
   })
-  addComponentSection(basketballConfig, 'Ball Offset (da centro paletta)', [
+  addComponentSection(basketballConfig, 'Ball Offset (from paddle center)', [
     { name: 'Forward', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetForward, onChange: v => { dribbleTuning.ballOffsetForward = v } },
     { name: 'Side', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetSide, onChange: v => { dribbleTuning.ballOffsetSide = v } },
     { name: 'Down', min: -40, max: 40, step: 1, value: dribbleTuning.ballOffsetDown, onChange: v => { dribbleTuning.ballOffsetDown = v } },
@@ -144,7 +144,7 @@ export function initDebugPanel(ctx) {
   const copyConfigFeedback = document.createElement('div')
   copyConfigFeedback.id = 'copy-config-feedback'
   debugPanel.append(copyConfigBtn, copyConfigFeedback)
-  const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms prima che il messaggio "Copiato" sparisca
+  const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms prima che il messaggio "Copied" sparisca
 
   copyConfigBtn.addEventListener('click', async () => {
     const c = {
@@ -168,7 +168,7 @@ export function initDebugPanel(ctx) {
     const text = Object.entries(c).map(([k, v]) => `${k}: ${v}`).join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      copyConfigFeedback.textContent = 'Copiato negli appunti ✓'
+      copyConfigFeedback.textContent = 'Copied to clipboard ✓'
     } catch {
       copyConfigFeedback.textContent = text
     }
@@ -212,7 +212,7 @@ export function initDebugPanel(ctx) {
     ['pickup-dist', () => {
       const ball = ctx.getBasketball()
       if (!ball) return '—'
-      return isRobotTouchingBall(manipulator, ball, getBallRadius(), pickupMargin) ? 'DENTRO (dovrebbe scattare)' : 'fuori'
+      return isRobotTouchingBall(manipulator, ball, getBallRadius(), pickupMargin) ? 'INSIDE (should trigger)' : 'outside'
     }],
     ['pickup-state', () => {
       const ball = ctx.getBasketball()

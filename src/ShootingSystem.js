@@ -138,8 +138,23 @@ export function initShootingSystem(ctx) {
 
   const shotFloorBounceSpeed = BALL_BOUNCE_SPEED * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
 
+  // in 1V1 ogni robot ha UN SOLO canestro bersaglio (getTargetHoopIndex,
+  // già usato da checkHoopScore per il punteggio) — l'arco dei 3 punti va
+  // giudicato contro QUEL canestro, non contro "il più vicino tra i due".
+  // Bug reale altrimenti: un giocatore che si spinge (dash) oltre metà
+  // campo, più vicino al canestro AVVERSARIO che al proprio, veniva
+  // giudicato "dentro l'arco" di quello sbagliato — tiro da 3 vero sul
+  // proprio canestro, ma forza ridotta al 60% (e 2 punti invece di 3 se
+  // fosse mai entrato) come se fosse un tiro facile da sotto il canestro
+  // avversario. Un solo canestro nell'array anche in PRACTICE se/quando
+  // avrà un bersaglio proprio; per ora lì resta null → nessuna restrizione
+  function hoopsForArcCheck() {
+    const targetHoopIndex = getTargetHoopIndex()
+    return targetHoopIndex == null ? collisionWorld.hoops : [collisionWorld.hoops[targetHoopIndex]]
+  }
+
   function getEffectiveShotSpeed(worldPosition) {
-    return isInsideThreePointArc(worldPosition, collisionWorld.hoops) ? shootTuning.shotSpeed * THREE_POINT_SPEED_REDUCTION : shootTuning.shotSpeed
+    return isInsideThreePointArc(worldPosition, hoopsForArcCheck()) ? shootTuning.shotSpeed * THREE_POINT_SPEED_REDUCTION : shootTuning.shotSpeed
   }
 
   // Point System: 2 punti se si tirava da dentro l'arco dei 3 punti, 3 se da
@@ -319,7 +334,7 @@ export function initShootingSystem(ctx) {
 
       if (!shootingState.released && t >= shootTuning.releasePoint) {
         getShotDirection(shotVelocity).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
-        shootingState.wasInsideArc = isInsideThreePointArc(manipulator.root.position, collisionWorld.hoops)
+        shootingState.wasInsideArc = isInsideThreePointArc(manipulator.root.position, hoopsForArcCheck())
         shootingState.released = true
         // FREE_SHOT (non FREE diretto): in volo, non ancora "sporca" — solo
         // BLOCK la intercetta da qui fino al primo urto, il pickup
@@ -499,7 +514,7 @@ export function initShootingSystem(ctx) {
   }
 
   return {
-    getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc: pos => isInsideThreePointArc(pos, collisionWorld.hoops),
+    getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc: pos => isInsideThreePointArc(pos, hoopsForArcCheck()),
     addScore, resetScore, checkHoopScore, clearAllCollisionCooldowns,
     updateShotFlight, updateShootAnimation, updateTrajectoryPreview, hideTrajectoryPreview,
     shotVelocity, trajDebug,

@@ -516,7 +516,7 @@
   <div id="loading-screen">
     <div class="menu-title">MECHA-BASKETBALL</div>
     <div id="loading-bar-track"><div id="loading-bar-fill"></div></div>
-    <div id="loading-label">CARICAMENTO...</div>
+    <div id="loading-label">LOADING...</div>
   </div>
 
   <div id="menu-overlay">
@@ -534,67 +534,67 @@
         <button class="menu-btn" data-gamemode="practice">PRACTICE</button>
         <button class="menu-btn" data-gamemode="1v1">1V1</button>
       </div>
-      <button class="menu-back" data-goto="menu-main">← indietro</button>
+      <button class="menu-back" data-goto="menu-main">← back</button>
     </div>
 
     <div id="menu-robot" class="menu-screen">
-      <div class="menu-title">SCEGLI IL ROBOT</div>
+      <div class="menu-title">CHOOSE ROBOT</div>
       <div class="menu-card-grid" id="robot-card-grid">
         <div class="menu-card" data-robot="manipulator">
           <div class="card-icon" id="robot-preview-manipulator"></div>
           <div class="card-title">MOBILE MANIPULATOR</div>
-          <div class="card-sub">Ruote · Bilanciato</div>
+          <div class="card-sub">Wheels · Balanced</div>
           <div class="card-stats" id="robot-stats-manipulator"></div>
           <div class="card-special">MOSSA: DASH (x2)</div>
         </div>
         <div class="menu-card disabled">
-          <div class="card-icon">?</div>
+          <div class="card-icon" id="robot-preview-legged"></div>
           <div class="card-title">LEGGED MANIPULATOR</div>
-          <div class="card-sub">In arrivo</div>
+          <div class="card-sub">Coming Soon</div>
           <div class="card-stats" id="robot-stats-legged"></div>
           <div class="card-special">MOSSA: JUMP</div>
         </div>
         <div class="menu-card disabled">
-          <div class="card-icon">?</div>
+          <div class="card-icon" id="robot-preview-drone"></div>
           <div class="card-title">DRONE</div>
-          <div class="card-sub">In arrivo</div>
+          <div class="card-sub">Coming Soon</div>
           <div class="card-stats" id="robot-stats-drone"></div>
           <div class="card-special">MOSSA: HIGH GROUND</div>
         </div>
       </div>
-      <button class="menu-back" data-goto="menu-gamemodes">← indietro</button>
+      <button class="menu-back" data-goto="menu-gamemodes">← back</button>
     </div>
 
     <div id="menu-robot-enemy" class="menu-screen">
-      <div class="menu-title">SCEGLI IL ROBOT AVVERSARIO</div>
+      <div class="menu-title">CHOOSE ENEMY ROBOT</div>
       <div class="menu-card-grid">
         <div class="menu-card" data-robot-enemy="manipulator">
           <div class="card-icon" id="robot-preview-manipulator-enemy"></div>
           <div class="card-title">MOBILE MANIPULATOR</div>
-          <div class="card-sub">Ruote · Bilanciato</div>
+          <div class="card-sub">Wheels · Balanced</div>
           <div class="card-stats" id="robot-stats-manipulator-enemy"></div>
           <div class="card-special">MOSSA: DASH (x2)</div>
         </div>
         <div class="menu-card disabled">
-          <div class="card-icon">?</div>
+          <div class="card-icon" id="robot-preview-legged-enemy"></div>
           <div class="card-title">LEGGED MANIPULATOR</div>
-          <div class="card-sub">In arrivo</div>
+          <div class="card-sub">Coming Soon</div>
           <div class="card-stats" id="robot-stats-legged-enemy"></div>
           <div class="card-special">MOSSA: JUMP</div>
         </div>
         <div class="menu-card disabled">
-          <div class="card-icon">?</div>
+          <div class="card-icon" id="robot-preview-drone-enemy"></div>
           <div class="card-title">DRONE</div>
-          <div class="card-sub">In arrivo</div>
+          <div class="card-sub">Coming Soon</div>
           <div class="card-stats" id="robot-stats-drone-enemy"></div>
           <div class="card-special">MOSSA: HIGH GROUND</div>
         </div>
       </div>
-      <button class="menu-back" data-goto="menu-robot">← indietro</button>
+      <button class="menu-back" data-goto="menu-robot">← back</button>
     </div>
 
     <div id="menu-timeofday" class="menu-screen">
-      <div class="menu-title">FASE DEL GIORNO</div>
+      <div class="menu-title">TIME OF DAY</div>
       <div class="menu-card-grid">
         <div class="menu-card" data-timeofday="sunrise"><div class="card-title">SUNRISE</div></div>
         <div class="menu-card" data-timeofday="day"><div class="card-title">DAY</div></div>
@@ -602,11 +602,11 @@
         <div class="menu-card" data-timeofday="night"><div class="card-title">NIGHT</div></div>
       </div>
       <button class="menu-btn hidden" id="menu-start-btn">START</button>
-      <button class="menu-back" id="menu-timeofday-back-btn">← indietro</button>
+      <button class="menu-back" id="menu-timeofday-back-btn">← back</button>
     </div>
 
     <div id="menu-pause" class="menu-screen">
-      <div class="menu-title">PAUSA</div>
+      <div class="menu-title">PAUSE</div>
       <div class="menu-btn-list">
         <button class="menu-btn" id="menu-back-to-game-btn">BACK TO GAME</button>
         <button class="menu-btn" data-goto-options-from="menu-pause">OPTIONS</button>
@@ -622,7 +622,7 @@
           <input type="checkbox" id="opt-ssao" checked />
         </div>
         <div class="option-row">
-          <span>Ombre</span>
+          <span>Shadows</span>
           <input type="checkbox" id="opt-shadows" checked />
         </div>
         <div class="option-row">
@@ -634,11 +634,11 @@
           <input type="range" id="opt-fov" min="60" max="100" step="1" value="75" />
         </div>
       </div>
-      <button class="menu-back" id="menu-options-back-btn">← indietro</button>
+      <button class="menu-back" id="menu-options-back-btn">← back</button>
     </div>
   </div>
 
-  <div id="hint" style="display:none">Click per entrare<br><small>WASD · Space/Shift · Mouse · P per debug · M per modalità</small></div>
+  <div id="hint" style="display:none">Click to enter<br><small>WASD · Space/Shift · Mouse · P for debug · M for mode</small></div>
   <div id="mode-indicator" class="hud-pill hidden">MODE: SPECTATE</div>
   <div id="dash-panel" class="hud-pill hidden">
     DASH
@@ -647,7 +647,7 @@
       <div class="dash-charge-block"><div class="dash-charge-fill" id="dash-charge-fill-1"></div></div>
     </div>
   </div>
-  <div id="controls-hint" class="hud-pill hidden">R: recupera la palla</div>
+  <div id="controls-hint" class="hud-pill hidden">R: recover the ball</div>
   <div id="combat-panel" class="hud-pill hidden">
     <div class="combat-row">
       <span class="combat-label">STEAL (Q)</span>

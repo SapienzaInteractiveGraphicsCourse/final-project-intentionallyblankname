@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
-import { lerpAngle } from './mathUtils.js'
 import { dribbleAmplitudesRad } from './BallPossession.js'
 import { isCombatMoveActive } from './CombatMoves.js'
 
@@ -14,7 +13,6 @@ export const EnemyState = Object.freeze({
   CHASE_BALL: 'chase_ball', // insegue la palla libera o cerca di rubarla (STEAL) a chi ce l'ha
   ATTACK: 'attack',         // ha la palla, punta al canestro e tira quando in range
   DEFEND: 'defend',         // l'avversario ha la palla, si frappone/cerca BLOCK
-  COVER: 'cover',           // 3v3 (Section 4): resta vicino ad altri avversari per coprirli
 })
 
 // distanza dal canestro sotto la quale l'AI tenta il tiro invece di
@@ -95,7 +93,6 @@ export function initEnemyAI(ctx) {
 
   let aiState = EnemyState.CHASE_BALL
   let aimTimer = 0
-  let wheelsAngle = -Math.PI / 2 // stesso valore iniziale del giocatore (main.js)
 
   const scratchDir = new THREE.Vector3()
   const scratchTarget = new THREE.Vector3()
@@ -119,9 +116,14 @@ export function initEnemyAI(ctx) {
   // bisogno di normalizzare solo per l'angolo)
   function steerToward(dirX, dirZ, delta) {
     const targetAngle = Math.atan2(dirX, dirZ)
-    wheelsAngle = lerpAngle(wheelsAngle, targetAngle, 1 - Math.exp(-AI_WHEEL_TURN_SPEED * delta))
-    enemyManipulator.controls.setWheelsYaw(wheelsAngle)
-    enemyManipulator.controls.setAimYaw(wheelsAngle)
+    // updateLocomotionAnimation (RobotBase.js) fa l'interpolazione vera e
+    // propria (lerpAngle, stesso smoothing di sempre) e la applica a
+    // wheelsGroup — di proprietà del robot, non più un `let` locale qui.
+    // Il braccio (setAimYaw) segue lo stesso yaw appena interpolato: a
+    // differenza del giocatore (mira da camera, scollegata dal movimento)
+    // il nemico non ha una camera, l'aim segue sempre la direzione di marcia
+    enemyManipulator.updateLocomotionAnimation(targetAngle, delta, AI_WHEEL_TURN_SPEED)
+    enemyManipulator.controls.setAimYaw(enemyManipulator.locomotionYaw)
   }
 
   // ruota ruote+braccio (base R1) verso targetPos, SENZA muovere la
@@ -277,14 +279,13 @@ export function initEnemyAI(ctx) {
     }
   }
 
-  // resync col mesh reale: wheelsAngle è una copia locale mantenuta per
-  // interpolare (lerpAngle) fluidamente frame-su-frame, non la sorgente di
-  // verità — se qualcun altro tocca enemyManipulator.controls.setWheelsYaw
-  // direttamente (MainMenu.js su BACK TO MAIN MENU), questa copia resta
-  // stantia e il prossimo lerpAngle farebbe scivolare visibilmente le
-  // ruote dal valore vecchio invece di ripartire pulito
+  // resync di enemyManipulator.locomotionYaw (RobotBase.js): se qualcun
+  // altro tocca enemyManipulator.controls.setWheelsYaw direttamente
+  // (MainMenu.js su BACK TO MAIN MENU) senza aggiornare anche questo, il
+  // prossimo updateLocomotionAnimation farebbe scivolare visibilmente le
+  // ruote dal valore vecchio (lerpAngle) invece di ripartire pulito
   function resetWheelsAngle(angle) {
-    wheelsAngle = angle
+    enemyManipulator.locomotionYaw = angle
   }
 
   return { update, getState: () => aiState, resetWheelsAngle }

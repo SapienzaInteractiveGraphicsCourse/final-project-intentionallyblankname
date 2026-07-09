@@ -59,8 +59,8 @@ export function initMainMenu(ctx) {
   function resetGameplayState() {
     manipulator.root.position.set(PLAYER_SPAWN_X, 0, 0)
     movementState.facing = 0
-    movementState.wheelsAngle = -Math.PI / 2 // combacia col valore iniziale del `let` a modulo originale
-    manipulator.controls.setWheelsYaw(movementState.wheelsAngle)
+    manipulator.locomotionYaw = -Math.PI / 2 // combacia col valore iniziale impostato dal costruttore di RobotBase
+    manipulator.controls.setWheelsYaw(manipulator.locomotionYaw)
     cameraState.orbitYaw = 0
     cameraState.orbitPitch = ORBIT_PITCH_REST
 
@@ -159,6 +159,12 @@ export function initMainMenu(ctx) {
     // l'altra è quella davvero mostrata
     menuState.robotPreviewActive = (id === 'menu-robot')
     menuState.enemyRobotPreviewActive = (id === 'menu-robot-enemy')
+    // stessa logica per le card LEGGED MANIPULATOR/DRONE (ancora "Coming
+    // Soon", ma con una vera anteprima 3D dal vivo — vedi main.js)
+    menuState.leggedRobotPreviewActive = (id === 'menu-robot')
+    menuState.enemyLeggedRobotPreviewActive = (id === 'menu-robot-enemy')
+    menuState.droneRobotPreviewActive = (id === 'menu-robot')
+    menuState.enemyDroneRobotPreviewActive = (id === 'menu-robot-enemy')
   }
   document.querySelectorAll('[data-goto]').forEach(el => {
     el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
@@ -212,6 +218,7 @@ export function initMainMenu(ctx) {
     enemyScoreboardEl.classList.add('hidden')
     controlsHintEl.classList.add('hidden')
     modeIndicator.classList.add('hidden')
+    manipulator.root.visible = false
     enemyManipulator.root.visible = false
     showMenuScreen('menu-main')
   })
@@ -230,6 +237,10 @@ export function initMainMenu(ctx) {
     menuState.mode = 'play'
     modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
     controls.lock()
+    // il campo resta vuoto per tutto il Main Menu (vedi main.js, dove
+    // entrambi partono con root.visible = false) — solo da qui in poi il
+    // robot del giocatore torna visibile, per davvero entrare in partita
+    manipulator.root.visible = true
     // PRACTICE è solo: il nemico resta nascosto (la sua AI/dispatch sono
     // già disattivati altrove in base a gameMode, questo è solo l'aspetto
     // visivo — senza, il modello procedurale restava lì fermo e visibile
@@ -246,8 +257,8 @@ export function initMainMenu(ctx) {
   }
   document.getElementById('menu-back-to-game-btn').addEventListener('click', resumeGame)
 
-  // PRACTICE e 1V1 hanno data-gamemode (3V3 resta un bottone disabled
-  // senza l'attributo, questo querySelectorAll non lo include nemmeno)
+  // solo PRACTICE e 1V1 esistono come bottoni (3V3 mai implementata, fuori
+  // scope — nessun bottone disabled da escludere qui)
   const gameModeMap = { practice: GameMode.PRACTICE, '1v1': GameMode.ONE_V_ONE }
   document.querySelectorAll('[data-gamemode]').forEach(el => {
     el.addEventListener('click', () => {
