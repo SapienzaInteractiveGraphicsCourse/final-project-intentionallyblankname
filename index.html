@@ -65,6 +65,17 @@
     #debug-panel input[type="range"] {
       width: 100%;
     }
+    #debug-panel input.debug-number-input {
+      width: 64px;
+      background: #1a1a1e;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 2px 4px;
+      margin-bottom: 4px;
+    }
     #debug-panel button {
       display: block;
       width: 100%;
@@ -99,6 +110,72 @@
       pointer-events: none;
     }
     #camera-panel div { margin-bottom: 2px; }
+
+    /* dissolvenza a schermo intero per il turnover di possesso 1V1 (canestro
+       subito / palla uscita dal campo non recuperata) — nasconde il
+       teletrasporto istantaneo del robot allo spawn invece di farlo vedere
+       (scatto disorientante della chase camera). Opacità pilotata a mano
+       ogni frame da updateTurnoverFade() in main.js, NON da una CSS
+       transition: deve restare deterministica/testabile come il resto delle
+       animazioni del progetto, non dipendere dal motore di transizione del
+       browser */
+    #turnover-fade {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      opacity: 0;
+      z-index: 19000;
+      pointer-events: none;
+    }
+    #turnover-fade.hidden { display: none; }
+
+    /* title screen di fine partita (1V1, primo a 11 punti) — stesso stile
+       pannello dei menu (clip-path/backdrop-filter), sopra a tutto */
+    #game-over-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 18000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #game-over-screen.hidden { display: none; }
+    #game-over-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    #game-over-panel {
+      position: relative;
+      background: var(--ui-panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px);
+      padding: 48px 64px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      animation: panel-arrival 0.25s ease-out;
+    }
+    #game-over-title {
+      font-family: 'Orbitron', monospace;
+      font-weight: 700;
+      font-size: 42px;
+      letter-spacing: 4px;
+      text-shadow: 0 0 16px rgba(255, 138, 30, 0.6);
+    }
+    #game-over-title.won { color: #3fff8a; text-shadow: 0 0 16px rgba(63, 255, 138, 0.6); }
+    #game-over-title.lost { color: #ff4444; text-shadow: 0 0 16px rgba(255, 68, 68, 0.6); }
+    #game-over-score {
+      font-family: 'Space Mono', monospace;
+      font-size: 16px;
+      color: #ccc;
+      letter-spacing: 1px;
+    }
 
     /* "Pillole" in basso (mode/dash): stesso box, colore/dimensione testo
        diversi per elemento */
@@ -227,6 +304,8 @@
        superiore per vincere davvero) */
     #combat-panel.hidden { display: none; }
     .combat-row { display: flex; align-items: center; gap: 8px; }
+    /* icona pertinente prima del nome di ogni skill (dash-panel/combat-panel) */
+    .skill-icon { flex-shrink: 0; vertical-align: middle; margin-right: 4px; color: var(--ui-orange); }
     .combat-row .combat-label { width: 68px; flex-shrink: 0; }
     .combat-bar-track {
       width: 100px;
@@ -410,7 +489,12 @@
       align-items: center;
       justify-content: center;
       margin-bottom: 10px;
-      background: rgba(0, 0, 0, 0.3);
+      /* grigio caldo chiaro invece di nero pieno — sui robot procedurali
+         (grigio scuro/nero con accenti arancio) uno sfondo nero li rendeva
+         quasi invisibili, poco contrasto. Scurito del 15% rispetto
+         all'originale (rgba(108,98,86)/rgba(58,50,40)) — stesso gradiente
+         di #robot-zoom-canvas-container */
+      background: radial-gradient(circle, rgba(92, 83, 73, 0.9) 0%, rgba(49, 43, 34, 0.9) 100%);
     }
     /* placeholder per le classi robot non ancora implementate (LEGGED
        MANIPULATOR, DRONE) — "?" grande e smorzato invece di testo nudo */
@@ -478,6 +562,143 @@
       letter-spacing: 0.5px;
       color: var(--ui-orange-dim);
     }
+    /* eye icon sotto ogni card robot: apre #robot-zoom-modal con la stessa
+       preview 3D live (stepDribble vero), solo più grande/zoomata — vedi
+       initRobotZoomModal in main.js. e.stopPropagation() sul click evita
+       che selezioni/navighi la card sottostante (l'intero .menu-card ha
+       già un proprio listener data-robot/data-robot-enemy) */
+    .card-zoom-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      width: 100%;
+      margin-top: 8px;
+      margin-bottom: 10px;
+      padding: 4px 0;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--ui-orange-dim);
+      color: var(--ui-orange);
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .card-zoom-btn:hover {
+      background: rgba(255, 138, 30, 0.18);
+      box-shadow: 0 0 10px rgba(255, 138, 30, 0.3);
+    }
+    .card-zoom-btn svg { flex-shrink: 0; }
+    /* pulsante "Personalizza" (solo card ALLEATE, vedi index.html) — stesso
+       schema del pulsante Preview ma con un'icona a palette COLORATA (i tre
+       colori veri del robot, non currentColor) per distinguerlo a colpo
+       d'occhio dal pulsante Preview accanto */
+    .card-customize-btn { border-color: var(--ui-orange); }
+    .card-customize-btn:hover {
+      background: rgba(255, 138, 30, 0.18);
+      box-shadow: 0 0 10px rgba(255, 138, 30, 0.3);
+    }
+    /* --- Modal di preview zoomata (eye icon) --- */
+    #robot-zoom-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 15000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #robot-zoom-modal.hidden { display: none; }
+    #robot-zoom-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    #robot-zoom-panel {
+      position: relative;
+      background: var(--ui-panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--ui-orange-dim);
+      clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px);
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      animation: panel-arrival 0.25s ease-out;
+    }
+    #robot-zoom-title {
+      font-family: 'Orbitron', monospace;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: 2px;
+      color: var(--ui-orange);
+      text-shadow: 0 0 10px rgba(255, 138, 30, 0.5);
+    }
+    #robot-zoom-body {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 20px;
+    }
+    #robot-zoom-canvas-container {
+      width: 480px;
+      height: 480px;
+      max-width: 70vw;
+      max-height: 60vh;
+      /* sfondo scurito del 15% rispetto all'originale (rgba(108,98,86)/
+         rgba(58,50,40)) — il modello del robot si vedeva ancora poco su
+         quello chiaro, ma non deve tornare nero pieno (vedi commento sotto
+         su .card-icon per il motivo originale) */
+      background: radial-gradient(circle, rgba(92, 83, 73, 0.9) 0%, rgba(49, 43, 34, 0.9) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* pannello colori — mostrato SOLO quando la modale è aperta da
+       "Personalizza" (solo robot alleato, vedi initRobotZoomModal in
+       main.js), nascosto per il normale pulsante Preview */
+    #robot-zoom-colors {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 150px;
+    }
+    #robot-zoom-colors.hidden { display: none; }
+    .zoom-color-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .zoom-color-row label {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: #ccc;
+    }
+    .zoom-color-row input[type="color"] {
+      width: 100%;
+      height: 32px;
+      border: 1px solid var(--ui-orange-dim);
+      background: none;
+      padding: 2px;
+      cursor: pointer;
+    }
+    #robot-zoom-close {
+      position: absolute;
+      top: 10px;
+      right: 14px;
+      background: none;
+      border: none;
+      color: #999;
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    #robot-zoom-close:hover { color: var(--ui-orange); }
     .menu-back {
       background: none;
       border: none;
@@ -516,7 +737,7 @@
   <div id="loading-screen">
     <div class="menu-title">MECHA-BASKETBALL</div>
     <div id="loading-bar-track"><div id="loading-bar-fill"></div></div>
-    <div id="loading-label">LOADING...</div>
+    <div id="loading-label">CREATING ROBOT MODELS</div>
   </div>
 
   <div id="menu-overlay">
@@ -542,24 +763,48 @@
       <div class="menu-card-grid" id="robot-card-grid">
         <div class="menu-card" data-robot="manipulator">
           <div class="card-icon" id="robot-preview-manipulator"></div>
+          <button class="card-zoom-btn" data-robot-zoom="manipulator" title="Preview" aria-label="Preview MOBILE MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
+          <button class="card-zoom-btn card-customize-btn" data-robot-customize="manipulator" title="Customize" aria-label="Customize MOBILE MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12"><circle cx="7" cy="8" r="3" fill="#e8942c"/><circle cx="17" cy="8" r="3" fill="#4a5560"/><circle cx="12" cy="16" r="3" fill="#8a8f96"/></svg>
+            CUSTOMIZE
+          </button>
           <div class="card-title">MOBILE MANIPULATOR</div>
           <div class="card-sub">Wheels · Balanced</div>
           <div class="card-stats" id="robot-stats-manipulator"></div>
           <div class="card-special">MOSSA: DASH (x2)</div>
         </div>
-        <div class="menu-card disabled">
+        <div class="menu-card" data-robot="legged">
           <div class="card-icon" id="robot-preview-legged"></div>
+          <button class="card-zoom-btn" data-robot-zoom="legged" title="Preview" aria-label="Preview LEGGED MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
+          <button class="card-zoom-btn card-customize-btn" data-robot-customize="legged" title="Customize" aria-label="Customize LEGGED MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12"><circle cx="7" cy="8" r="3" fill="#e8942c"/><circle cx="17" cy="8" r="3" fill="#4a5560"/><circle cx="12" cy="16" r="3" fill="#8a8f96"/></svg>
+            CUSTOMIZE
+          </button>
           <div class="card-title">LEGGED MANIPULATOR</div>
-          <div class="card-sub">Coming Soon</div>
+          <div class="card-sub">Legs · Slow, Defensive</div>
           <div class="card-stats" id="robot-stats-legged"></div>
           <div class="card-special">MOSSA: JUMP</div>
         </div>
-        <div class="menu-card disabled">
+        <div class="menu-card" data-robot="drone">
           <div class="card-icon" id="robot-preview-drone"></div>
+          <button class="card-zoom-btn" data-robot-zoom="drone" title="Preview" aria-label="Preview DRONE">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
+          <button class="card-zoom-btn card-customize-btn" data-robot-customize="drone" title="Customize" aria-label="Customize DRONE">
+            <svg viewBox="0 0 24 24" width="12" height="12"><circle cx="7" cy="8" r="3" fill="#e8942c"/><circle cx="17" cy="8" r="3" fill="#4a5560"/><circle cx="12" cy="16" r="3" fill="#8a8f96"/></svg>
+            CUSTOMIZE
+          </button>
           <div class="card-title">DRONE</div>
-          <div class="card-sub">Coming Soon</div>
+          <div class="card-sub">Flight · Fast, Scorer</div>
           <div class="card-stats" id="robot-stats-drone"></div>
-          <div class="card-special">MOSSA: HIGH GROUND</div>
+          <div class="card-special">MOSSA: FLIGHT</div>
         </div>
       </div>
       <button class="menu-back" data-goto="menu-gamemodes">← back</button>
@@ -570,24 +815,36 @@
       <div class="menu-card-grid">
         <div class="menu-card" data-robot-enemy="manipulator">
           <div class="card-icon" id="robot-preview-manipulator-enemy"></div>
+          <button class="card-zoom-btn" data-robot-zoom="manipulator" title="Preview" aria-label="Preview MOBILE MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
           <div class="card-title">MOBILE MANIPULATOR</div>
           <div class="card-sub">Wheels · Balanced</div>
           <div class="card-stats" id="robot-stats-manipulator-enemy"></div>
           <div class="card-special">MOSSA: DASH (x2)</div>
         </div>
-        <div class="menu-card disabled">
+        <div class="menu-card" data-robot-enemy="legged">
           <div class="card-icon" id="robot-preview-legged-enemy"></div>
+          <button class="card-zoom-btn" data-robot-zoom="legged" title="Preview" aria-label="Preview LEGGED MANIPULATOR">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
           <div class="card-title">LEGGED MANIPULATOR</div>
-          <div class="card-sub">Coming Soon</div>
+          <div class="card-sub">Legs · Slow, Defensive</div>
           <div class="card-stats" id="robot-stats-legged-enemy"></div>
           <div class="card-special">MOSSA: JUMP</div>
         </div>
-        <div class="menu-card disabled">
+        <div class="menu-card" data-robot-enemy="drone">
           <div class="card-icon" id="robot-preview-drone-enemy"></div>
+          <button class="card-zoom-btn" data-robot-zoom="drone" title="Preview" aria-label="Preview DRONE">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            PREVIEW
+          </button>
           <div class="card-title">DRONE</div>
-          <div class="card-sub">Coming Soon</div>
+          <div class="card-sub">Flight · Fast, Scorer</div>
           <div class="card-stats" id="robot-stats-drone-enemy"></div>
-          <div class="card-special">MOSSA: HIGH GROUND</div>
+          <div class="card-special">MOSSA: FLIGHT</div>
         </div>
       </div>
       <button class="menu-back" data-goto="menu-robot">← back</button>
@@ -638,10 +895,52 @@
     </div>
   </div>
 
+  <!-- Modal di preview zoomata (eye icon sotto ogni card robot) — stessa
+       preview 3D live (stepDribble vero) delle card, solo più grande e più
+       zoomata. Vedi initRobotZoomModal in main.js -->
+  <div id="robot-zoom-modal" class="hidden">
+    <div id="robot-zoom-backdrop"></div>
+    <div id="robot-zoom-panel">
+      <button id="robot-zoom-close" aria-label="Close preview">✕</button>
+      <div id="robot-zoom-title"></div>
+      <div id="robot-zoom-body">
+        <div id="robot-zoom-canvas-container"></div>
+        <!-- pannello colori: mostrato solo aprendo da "Personalizza" (robot
+             alleato), nascosto per il normale pulsante Preview — vedi
+             initRobotZoomModal in main.js -->
+        <div id="robot-zoom-colors" class="hidden">
+          <div class="zoom-color-row">
+            <label for="zoom-color-accent">ACCENT (orange)</label>
+            <input type="color" id="zoom-color-accent" />
+          </div>
+          <div class="zoom-color-row">
+            <label for="zoom-color-arm">ARM (black/dark gray)</label>
+            <input type="color" id="zoom-color-arm" />
+          </div>
+          <div class="zoom-color-row">
+            <label for="zoom-color-body">BODY (gray)</label>
+            <input type="color" id="zoom-color-body" />
+          </div>
+          <button class="menu-btn" id="zoom-color-reset">RESET</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="turnover-fade" class="hidden"></div>
+  <div id="game-over-screen" class="hidden">
+    <div id="game-over-backdrop"></div>
+    <div id="game-over-panel">
+      <div id="game-over-title"></div>
+      <div id="game-over-score"></div>
+      <button class="menu-btn" id="game-over-back-btn">BACK TO MAIN MENU</button>
+    </div>
+  </div>
   <div id="hint" style="display:none">Click to enter<br><small>WASD · Space/Shift · Mouse · P for debug · M for mode</small></div>
   <div id="mode-indicator" class="hud-pill hidden">MODE: SPECTATE</div>
   <div id="dash-panel" class="hud-pill hidden">
-    DASH
+    <svg class="skill-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+    <span id="dash-panel-label">DASH</span>
     <div id="dash-charges">
       <div class="dash-charge-block"><div class="dash-charge-fill" id="dash-charge-fill-0"></div></div>
       <div class="dash-charge-block"><div class="dash-charge-fill" id="dash-charge-fill-1"></div></div>
@@ -650,10 +949,12 @@
   <div id="controls-hint" class="hud-pill hidden">R: recover the ball</div>
   <div id="combat-panel" class="hud-pill hidden">
     <div class="combat-row">
+      <svg class="skill-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11V6a2 2 0 1 1 4 0v5M13 8a2 2 0 1 1 4 0v4M17 10a2 2 0 1 1 4 0v3c0 4-2 7-6 7h-2c-3 0-4-1-6-4l-2-3.5c-.6-1 .2-2.3 1.4-2 .6.2 1 .5 1.4 1L9 13"/></svg>
       <span class="combat-label">STEAL (Q)</span>
       <div class="combat-bar-track"><div id="steal-bar-fill" class="combat-bar-fill"></div></div>
     </div>
     <div class="combat-row">
+      <svg class="skill-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3z"/></svg>
       <span class="combat-label">BLOCK (E)</span>
       <div class="combat-bar-track"><div id="block-bar-fill" class="combat-bar-fill"></div></div>
     </div>

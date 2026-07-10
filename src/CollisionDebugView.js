@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { angleToForward, rotateRight } from './mathUtils.js'
+import { getObjectWorldPosition } from './BallPossession.js'
+import { blockBoxHalfSizeFor } from './CombatMoves.js'
 
 // Wireframe overlay dei volumi di collisione/contatto usati dal gioco, per
 // ISPEZIONARLI a occhio invece di leggerne solo i numeri (quello resta il
@@ -30,6 +32,7 @@ const KEY_BINDINGS = {
   Digit6: 'steal',
   Digit7: 'block',
   Digit8: 'pickup',
+  Digit9: 'body',
 }
 
 const CATEGORY_LABELS = {
@@ -39,8 +42,9 @@ const CATEGORY_LABELS = {
   poles: 'Pali lampione',
   benches: 'Panchine',
   steal: 'STEAL (zona furto)',
-  block: 'BLOCK (raggio contatto)',
+  block: 'BLOCK (cubo end effector)',
   pickup: 'PICKUP (zona raccolta)',
+  body: 'BODY (volume corporeo)',
 }
 
 const WIRE_COLORS = {
@@ -52,14 +56,15 @@ const WIRE_COLORS = {
   steal: 0xffff00,
   block: 0xff00ff,
   pickup: 0x00ff88,
+  body: 0x00aaff,
 }
 
 export function initCollisionDebugView(ctx) {
   const {
     scene, collisionWorld, rimRingRadius, rimTubeRadius,
-    manipulator, enemyManipulator, getBasketball,
+    getManipulator, getEnemyManipulator,
     getPlayerAimYaw, getEnemyAimYaw, stealForwardMargin, stealBackwardMargin,
-    blockContactRadius, pickupMargin,
+    pickupMargin,
   } = ctx
 
   const groups = {}
@@ -145,16 +150,23 @@ export function initCollisionDebugView(ctx) {
     ring.geometry.attributes.position.needsUpdate = true
   }
 
-  // --- 7: BLOCK — sfera di contatto attorno alla palla (paletta-vs-palla,
-  // BLOCK_CONTACT_RADIUS), rilevante solo mentre la palla è FREE_SHOT ma
-  // mostrata sempre finché il pallone esiste, per poterla ispezionare anche
-  // da fermi
+  // --- 7: BLOCK — cubo attorno all'END EFFECTOR di CIASCUN robot, stesso
+  // identico test (blockBoxHalfSizeFor) usato dalla logica vera in
+  // CombatMoves.js — dimensione scalata sulla stat BLOCK di quel robot
+  // (livello 1 = contiene solo l'end effector, +20%/livello fino a +80% a
+  // livello 5), non più una sfera fissa uguale per tutti attorno alla palla
   const blockGroup = makeGroup('block')
-  const blockSphere = new THREE.Mesh(
-    new THREE.SphereGeometry(blockContactRadius, 16, 12),
-    new THREE.MeshBasicMaterial({ color: WIRE_COLORS.block, wireframe: true, toneMapped: false })
-  )
-  blockGroup.add(blockSphere)
+  const playerBlockBox = new THREE.Box3()
+  const enemyBlockBox = new THREE.Box3()
+  blockGroup.add(new THREE.Box3Helper(playerBlockBox, WIRE_COLORS.block))
+  blockGroup.add(new THREE.Box3Helper(enemyBlockBox, WIRE_COLORS.block))
+  const scratchEndEffectorPos = new THREE.Vector3()
+  function updateBlockBox(box, robot) {
+    getObjectWorldPosition(robot.paddle, scratchEndEffectorPos)
+    const halfSize = blockBoxHalfSizeFor(robot.stats.block)
+    box.min.set(scratchEndEffectorPos.x - halfSize, scratchEndEffectorPos.y - halfSize, scratchEndEffectorPos.z - halfSize)
+    box.max.set(scratchEndEffectorPos.x + halfSize, scratchEndEffectorPos.y + halfSize, scratchEndEffectorPos.z + halfSize)
+  }
 
   // --- 8: PICKUP — zona attorno a CIASCUN robot (box propria espansa di
   // PICKUP_MARGIN): raccolta automatica quando la palla libera la tocca,
@@ -165,22 +177,34 @@ export function initCollisionDebugView(ctx) {
   pickupGroup.add(new THREE.Box3Helper(playerPickupBox, WIRE_COLORS.pickup))
   pickupGroup.add(new THREE.Box3Helper(enemyPickupBox, WIRE_COLORS.pickup))
 
+  // --- 9: BODY — "volume corporeo standard" di CIASCUN robot (bounding box
+  // reale, RobotBase.getBodyBox — stessa fonte usata da pickup/STEAL/qui,
+  // non una forma a mano che potrebbe disallinearsi dal modello vero)
+  const bodyGroup = makeGroup('body')
+  const playerBodyBox = new THREE.Box3()
+  const enemyBodyBox = new THREE.Box3()
+  bodyGroup.add(new THREE.Box3Helper(playerBodyBox, WIRE_COLORS.body))
+  bodyGroup.add(new THREE.Box3Helper(enemyBodyBox, WIRE_COLORS.body))
+
   // ricalcolate ogni frame SOLO se il gruppo relativo è visibile — niente
   // setFromObject/traverse (non gratis, cammina l'intera gerarchia del
   // robot) per una categoria spenta
   function update() {
     if (stealGroup.visible) {
-      updateStealRing(playerStealRing, manipulator.root.position, getPlayerAimYaw())
-      updateStealRing(enemyStealRing, enemyManipulator.root.position, getEnemyAimYaw())
+      updateStealRing(playerStealRing, getManipulator().root.position, getPlayerAimYaw())
+      updateStealRing(enemyStealRing, getEnemyManipulator().root.position, getEnemyAimYaw())
     }
     if (pickupGroup.visible) {
-      playerPickupBox.setFromObject(manipulator.root).expandByScalar(pickupMargin)
-      enemyPickupBox.setFromObject(enemyManipulator.root).expandByScalar(pickupMargin)
+      playerPickupBox.setFromObject(getManipulator().root).expandByScalar(pickupMargin)
+      enemyPickupBox.setFromObject(getEnemyManipulator().root).expandByScalar(pickupMargin)
     }
     if (blockGroup.visible) {
-      const ball = getBasketball()
-      blockSphere.visible = !!ball
-      if (ball) blockSphere.position.copy(ball.position)
+      updateBlockBox(playerBlockBox, getManipulator())
+      updateBlockBox(enemyBlockBox, getEnemyManipulator())
+    }
+    if (bodyGroup.visible) {
+      getManipulator().getBodyBox(playerBodyBox)
+      getEnemyManipulator().getBodyBox(enemyBodyBox)
     }
   }
 

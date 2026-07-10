@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { createProceduralPBRMaps, drawBrushedMetal, drawOrganicGrain } from './manipulator.js'
+import { createProceduralPBRMaps, drawBrushedMetal, drawOrganicGrain, createArmAccentMaterials } from './AMRManipulatorModelMaker.js'
+import { replaceGeometry, makeScaleSetter, makeLinkGeometry, makeTaperedLinkGeometry, createLinkControls, createColorControls } from './geometryControlHelpers.js'
 
 // Classe LEGGED MANIPULATOR: stesso modello del MANIPULATOR a ruote (stesso
 // disco, stesso manipolatore 3R per palleggio/tiro — quella parte non
@@ -25,7 +26,7 @@ import { createProceduralPBRMaps, drawBrushedMetal, drawOrganicGrain } from './m
 // Animation Tweaks), l'intero gruppo pivota rigidamente verso la direzione
 // di marcia — un placeholder onesto, non un vero "cammino", ma visivamente
 // comprensibile e a costo zero rispetto a MANIPULATOR.
-export function createLeggedManipulatorRobot() {
+export function LeggedManipulatorModelMaker() {
   const root = new THREE.Group()
 
   // stessi materiali/texture procedurali di MANIPULATOR (stessa famiglia
@@ -34,14 +35,11 @@ export function createLeggedManipulatorRobot() {
   const bodyMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
   const legMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
   const footMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 900, 2.5), baseRoughness: 0.85, roughnessVariation: 0.15 })
-  const armMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
-  const accentMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 1400, 1.4), baseRoughness: 0.3, roughnessVariation: 0.1 })
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.4, normalMap: bodyMaps.normalMap, roughnessMap: bodyMaps.roughnessMap })
   const legMat = new THREE.MeshStandardMaterial({ color: 0x515a63, roughness: 0.4, metalness: 0.5, normalMap: legMaps.normalMap, roughnessMap: legMaps.roughnessMap })
   const footMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.85, metalness: 0.1, normalMap: footMaps.normalMap, roughnessMap: footMaps.roughnessMap })
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.4, metalness: 0.5, normalMap: armMaps.normalMap, roughnessMap: armMaps.roughnessMap })
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0xe8942c, roughness: 0.3, metalness: 0.3, normalMap: accentMaps.normalMap, roughnessMap: accentMaps.roughnessMap })
+  const { armMat, accentMat } = createArmAccentMaterials()
 
   // stato: stessi campi/stessi default di MANIPULATOR per disco+braccio 3R
   // (vedi manipulator.js — "stesso modello"), manipulatorScale 25% più
@@ -67,29 +65,41 @@ export function createLeggedManipulatorRobot() {
   const INITIAL_DISC_RADIUS = state.discRadius
 
   // --- Gambe: 4 bracci R2 (anca+ginocchio) al posto delle ruote ---
-  // stessi offset X/Z usati dalle ruote di MANIPULATOR (stessa "impronta a
-  // terra"), lunghezza link = 35% dei link del braccio 3R sopra
-  const LEG_OFFSET_X = 0.9
-  const LEG_OFFSET_Z = 0.9
+  // NON più gli stessi offset delle ruote di MANIPULATOR (0.9,0.9 — raggio
+  // diagonale ≈1.27, oltre discRadius=1: il giunto anca sporgeva ben fuori
+  // dal bordo del disco). Qui invece il giunto (raggio legJointRadius=0.16,
+  // sotto) deve stare TUTTO dentro il disco: raggio diagonale ≈0.78 + 0.16
+  // di giunto ≈0.94 < discRadius=1, con margine. Lunghezza link = 35% dei
+  // link del braccio 3R sopra
+  const LEG_OFFSET_X = 0.55
+  const LEG_OFFSET_Z = 0.55
   const legLink1Length = state.link1Length * 0.35 // coscia
   const legLink2Length = state.link2Length * 0.35 // stinco
   const legLink1Thickness = 0.16
   const legLink2Thickness = 0.14
   const legJointRadius = 0.16
-  // anca inclinata quasi verticale verso il basso (150°: 0° sarebbe "su",
-  // 180° dritta in giù) — leggero splay per stabilità visiva; ginocchio la
-  // richiude parzialmente (-30°) verso la verticale, "zampa" invece di
-  // "bastone dritto". Angoli di riposo fissi per ora (nessuna animazione di
-  // passo, vedi commento in cima al file) — quando arriverà un vero ciclo
-  // di camminata questi diventano il punto di partenza dell'interpolazione
-  const HIP_REST_PITCH = THREE.MathUtils.degToRad(150)
-  const KNEE_REST_PITCH = THREE.MathUtils.degToRad(-30)
+  // anca dritta verso il basso (180°: 0° sarebbe "su") — lo splay
+  // precedente (150°, 30° corti rispetto a dritta) faceva sembrare le
+  // gambe piegate verso l'ESTERNO (lontano dal corpo) invece che dritte;
+  // ginocchio la richiude parzialmente (-30°) verso la verticale, "zampa"
+  // invece di "bastone dritto". Angoli di riposo fissi per ora (nessuna
+  // animazione di passo, vedi commento in cima al file) — quando arriverà
+  // un vero ciclo di camminata questi diventano il punto di partenza
+  // dell'interpolazione
+  const HIP_REST_PITCH = THREE.MathUtils.degToRad(180)
+  // segno invertito (+30 invece di -30): con -30 il ginocchio piegava lo
+  // stinco verso l'ESTERNO (lontano dal corpo, in continuità con l'anca
+  // ormai dritta) — dovrebbe piegare verso l'INTERNO invece, come un vero
+  // ginocchio/gomito di zampa
+  const KNEE_REST_PITCH = THREE.MathUtils.degToRad(30)
+  // ampiezza dell'oscillazione anca durante il trot (setLegWalkCycle sotto)
+  // — valore di partenza, non tarato a occhio: primo giro di tuning
+  // visivo ancora da fare (stesso spirito di Jump/Flight)
+  const WALK_SWING_AMPLITUDE = 0.3
 
-  function makeLinkGeometry(length, thickness) {
-    const geo = new THREE.BoxGeometry(thickness, length, thickness)
-    geo.translate(0, length / 2, 0) // pivot all'estremità superiore (anca/ginocchio)
-    return geo
-  }
+  // makeLinkGeometry ora in geometryControlHelpers.js (condivisa dai 3
+  // ModelMaker) — riusata qui sia per le gambe (anca/ginocchio) sia più
+  // sotto per link1 del braccio, stesso identico pivot all'estremità
 
   // altezza (world, pre-manipulatorScale) da dove si aggancia l'anca fino a
   // terra, derivata dalla vera geometria delle gambe (coscia+stinco alla
@@ -103,6 +113,10 @@ export function createLeggedManipulatorRobot() {
 
   const legsGroup = new THREE.Group()
   const feet = []
+  // riferimenti anca/ginocchio per gamba — servono a setLegBend() sotto
+  // (Jump: le gambe si accovacciano prima dello scatto e si estendono
+  // durante il salto), non solo alla costruzione iniziale
+  const legs = []
   ;[
     [-LEG_OFFSET_X, -LEG_OFFSET_Z],
     [LEG_OFFSET_X, -LEG_OFFSET_Z],
@@ -163,6 +177,7 @@ export function createLeggedManipulatorRobot() {
     const foot = new THREE.Mesh(footGeo, footMat)
     ankle.add(foot)
     feet.push(foot)
+    legs.push({ hip, knee })
   })
   root.add(legsGroup)
 
@@ -184,14 +199,7 @@ export function createLeggedManipulatorRobot() {
   const baseJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius, 16, 16), armMat)
   base.add(baseJoint)
 
-  function makeTaperedLinkGeometry(length, baseThickness, tipThickness) {
-    const rBase = baseThickness / Math.SQRT2
-    const rTip = tipThickness / Math.SQRT2
-    const geo = new THREE.CylinderGeometry(rTip, rBase, length, 4)
-    geo.rotateY(Math.PI / 4)
-    geo.translate(0, length / 2, 0)
-    return geo
-  }
+  // makeTaperedLinkGeometry ora in geometryControlHelpers.js (condivisa)
 
   const link1Group = new THREE.Group()
   base.add(link1Group)
@@ -287,64 +295,35 @@ export function createLeggedManipulatorRobot() {
   applyLegsGroupScale()
   syncChassisHeight()
 
-  function replaceGeometry(mesh, newGeo) {
-    mesh.geometry.dispose()
-    mesh.geometry = newGeo
-  }
-  function makeScaleSetter(key, mesh) {
-    return s => {
-      state[key] = s
-      mesh.scale.setScalar(s)
-    }
-  }
-  function createLinkControls({ statePrefix, mesh, downstreamJoint, buildGeometry, thicknessNames }) {
-    const lengthKey = `${statePrefix}Length`
-    function rebuild() {
-      const thicknessArgs = thicknessNames.map(name => state[`${statePrefix}${name}`])
-      replaceGeometry(mesh, buildGeometry(state[lengthKey], ...thicknessArgs))
-    }
-    const linkControls = {
-      [`${statePrefix}Scale`]: makeScaleSetter(`${statePrefix}Scale`, mesh),
-      [lengthKey](l) {
-        state[lengthKey] = l
-        rebuild()
-        downstreamJoint.position.y = l
-      },
-    }
-    thicknessNames.forEach(name => {
-      linkControls[`${statePrefix}${name}`] = t => {
-        state[`${statePrefix}${name}`] = t
-        rebuild()
-      }
-    })
-    return linkControls
-  }
+  // replaceGeometry/makeScaleSetter/createLinkControls ora in
+  // geometryControlHelpers.js (condivise dai 3 ModelMaker) — prendono
+  // `state` esplicito come primo argomento invece di chiuderlo
 
   const controls = {
-    manipulatorScale: makeScaleSetter('manipulatorScale', root),
+    manipulatorScale: makeScaleSetter(state, 'manipulatorScale', root),
     legsScale(s) {
       state.legsScale = s
       applyLegsGroupScale()
       syncChassisHeight()
     },
-    discScale: makeScaleSetter('discScale', disc),
+    discScale: makeScaleSetter(state, 'discScale', disc),
     discRadius(r) {
       state.discRadius = r
       replaceGeometry(disc, new THREE.CylinderGeometry(r, r, discHeight, 32))
       applyLegsGroupScale()
       syncChassisHeight()
     },
-    ...createLinkControls({
+    ...createLinkControls(state, {
       statePrefix: 'link1', mesh: link1, downstreamJoint: elbow,
       buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'],
     }),
-    ...createLinkControls({
+    ...createLinkControls(state, {
       statePrefix: 'link2', mesh: link2, downstreamJoint: wrist,
       buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'],
     }),
-    baseJointScale: makeScaleSetter('baseJointScale', baseJoint),
-    elbowJointScale: makeScaleSetter('elbowJointScale', elbowJoint),
-    endEffectorScale: makeScaleSetter('endEffectorScale', endEffector),
+    baseJointScale: makeScaleSetter(state, 'baseJointScale', baseJoint),
+    elbowJointScale: makeScaleSetter(state, 'elbowJointScale', elbowJoint),
+    endEffectorScale: makeScaleSetter(state, 'endEffectorScale', endEffector),
 
     setAimYaw(angle) {
       base.rotation.y = angle
@@ -385,6 +364,38 @@ export function createLeggedManipulatorRobot() {
     setWheelsYaw(angle) {
       legsGroup.rotation.y = angle
     },
+    // Jump (LeggedManipulator.js): un solo offset applicato a
+    // anca+ginocchio di TUTTE e 4 le gambe insieme (stesso principio del
+    // gomito+link1 nel palleggio del braccio, mossi in coppia) — negativo
+    // per accovacciarsi (anticipazione prima dello scatto), positivo per
+    // estendersi durante il salto. Non tracciato in state/Copy Config: è
+    // posa, non forma
+    setLegBend(offset) {
+      legs.forEach(({ hip, knee }) => {
+        hip.rotation.x = HIP_REST_PITCH + offset
+        knee.rotation.x = KNEE_REST_PITCH + offset
+      })
+    },
+    // Bozza di camminata (LeggedManipulator.js): andatura "trot" —
+    // le 4 gambe sono agli stessi 4 angoli delle ruote di MANIPULATOR,
+    // quindi le coppie DIAGONALI sono gli indici (0,3) e (1,2) (vedi
+    // l'array di offset sopra: 0=(-x,-z), 1=(x,-z), 2=(-x,z), 3=(x,z) —
+    // la diagonale di 0 è 3, quella di 1 è 2). phase avanza nel tempo
+    // mentre ci si muove (LeggedManipulator la guida); le due coppie
+    // oscillano in opposizione (sin/-sin), come un vero trotto a 4 zampe
+    // invece di muoversi tutte insieme (che sembrerebbe un salto, non un
+    // passo). Il ginocchio segue con un piccolo sfasamento/ampiezza
+    // ridotta rispetto all'anca — non IK vero, solo abbastanza per
+    // leggere "gamba che si piega quando avanza" invece di un pendolo rigido
+    setLegWalkCycle(phase) {
+      legs.forEach(({ hip, knee }, i) => {
+        const pairSign = (i === 0 || i === 3) ? 1 : -1
+        const swing = Math.sin(phase) * pairSign * WALK_SWING_AMPLITUDE
+        hip.rotation.x = HIP_REST_PITCH + swing
+        knee.rotation.x = KNEE_REST_PITCH - swing * 0.6
+      })
+    },
+    ...createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }),
   }
 
   controls.discScale(state.discScale)

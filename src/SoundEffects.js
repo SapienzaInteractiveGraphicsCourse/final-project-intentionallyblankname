@@ -152,49 +152,47 @@ export class SoundEffects {
     contact.stop(t + BOUNCE_CONTACT_DURATION)
   }
 
-  // rumore bianco filtrato (bandpass, centro che sale) invece di un
-  // oscillatore puro — un "whoosh" ha bisogno di uno spettro largo, non una
-  // singola frequenza. Q basso (banda larga): un Q alto suonava troppo
-  // "nasale"/fischiante invece che un soffio morbido
-  playShoot() {
+  // Rumore bianco filtrato passa-banda con un centro-frequenza che scivola
+  // (sweep) da un valore all'altro — playShoot ("whoosh" ascendente) e
+  // playSteal ("swipe" discendente, molto più breve) erano la STESSA
+  // tecnica ripetuta due volte, differivano solo nei numeri: consolidata
+  // qui, un solo posto in cui aggiungere un terzo suono con questa stessa
+  // forma in futuro
+  _playBandpassNoiseSweep({ q, freqStart, freqEnd, sweepTime, peakGain, attackTime, duration }) {
     const ctx = this.listener.context
     const t = ctx.currentTime
     const noise = ctx.createBufferSource()
     noise.buffer = this.noiseBuffer
     const filter = ctx.createBiquadFilter()
     filter.type = 'bandpass'
-    filter.Q.value = SHOOT_FILTER_Q
-    filter.frequency.setValueAtTime(SHOOT_FREQ_START, t)
-    filter.frequency.exponentialRampToValueAtTime(SHOOT_FREQ_END, t + SHOOT_SWEEP_TIME)
+    filter.Q.value = q
+    filter.frequency.setValueAtTime(freqStart, t)
+    filter.frequency.exponentialRampToValueAtTime(freqEnd, t + sweepTime)
     const gain = ctx.createGain()
-    this._applyEnvelope(gain, t, SHOOT_PEAK_GAIN, SHOOT_ATTACK_TIME, SHOOT_DURATION)
+    this._applyEnvelope(gain, t, peakGain, attackTime, duration)
     noise.connect(filter)
     filter.connect(gain)
     gain.connect(this.listener.getInput())
     noise.start(t)
-    noise.stop(t + SHOOT_DURATION)
+    noise.stop(t + duration)
   }
 
-  // "swipe" secco per uno STEAL riuscito — stessa tecnica di playShoot
-  // (rumore bianco passa-banda) ma sweep discendente invece che ascendente
-  // e molto più breve, per non confonderlo col whoosh del tiro
+  // "whoosh": centro-frequenza che SALE. Q basso (banda larga): un Q alto
+  // suonava troppo "nasale"/fischiante invece che un soffio morbido
+  playShoot() {
+    this._playBandpassNoiseSweep({
+      q: SHOOT_FILTER_Q, freqStart: SHOOT_FREQ_START, freqEnd: SHOOT_FREQ_END,
+      sweepTime: SHOOT_SWEEP_TIME, peakGain: SHOOT_PEAK_GAIN, attackTime: SHOOT_ATTACK_TIME, duration: SHOOT_DURATION,
+    })
+  }
+
+  // "swipe" secco per uno STEAL riuscito: centro-frequenza che SCENDE
+  // (opposto di playShoot) e molto più breve, per non confonderlo col whoosh
   playSteal() {
-    const ctx = this.listener.context
-    const t = ctx.currentTime
-    const noise = ctx.createBufferSource()
-    noise.buffer = this.noiseBuffer
-    const filter = ctx.createBiquadFilter()
-    filter.type = 'bandpass'
-    filter.Q.value = STEAL_FILTER_Q
-    filter.frequency.setValueAtTime(STEAL_FREQ_START, t)
-    filter.frequency.exponentialRampToValueAtTime(STEAL_FREQ_END, t + STEAL_SWEEP_TIME)
-    const gain = ctx.createGain()
-    this._applyEnvelope(gain, t, STEAL_PEAK_GAIN, STEAL_ATTACK_TIME, STEAL_DURATION)
-    noise.connect(filter)
-    filter.connect(gain)
-    gain.connect(this.listener.getInput())
-    noise.start(t)
-    noise.stop(t + STEAL_DURATION)
+    this._playBandpassNoiseSweep({
+      q: STEAL_FILTER_Q, freqStart: STEAL_FREQ_START, freqEnd: STEAL_FREQ_END,
+      sweepTime: STEAL_SWEEP_TIME, peakGain: STEAL_PEAK_GAIN, attackTime: STEAL_ATTACK_TIME, duration: STEAL_DURATION,
+    })
   }
 
   // "thwack" secco e basso per un BLOCK riuscito: rumore passa-basso

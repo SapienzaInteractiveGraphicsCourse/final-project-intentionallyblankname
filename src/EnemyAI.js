@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
-import { dribbleAmplitudesRad } from './BallPossession.js'
 import { isCombatMoveActive } from './CombatMoves.js'
 
 // FSM delle decisioni dell'AI nemica — "enum" congelato, stesso pattern di
@@ -79,14 +78,14 @@ const AI_BLOCK_ATTEMPT_RANGE = 150
 // non prima
 export function initEnemyAI(ctx) {
   const {
-    enemyManipulator, playerManipulator, getBasketball, collisionWorld,
-    enemyDribbleState, enemyHandlingState, enemyShootingState,
-    dribbleTuning, clearAllCollisionCooldowns, targetHoopIndex = 0,
+    getEnemyManipulator, getPlayerManipulator, getBasketball, collisionWorld,
+    enemyShootingState,
+    targetHoopIndex = 0,
     // canestro a cui punta il GIOCATORE (per posizionarsi in DEFEND) — di
     // solito l'altro rispetto a targetHoopIndex, ma non assunto: passato
     // esplicito per restare corretto qualunque sia l'assegnazione squadre
     playerTargetHoopIndex = 0,
-    triggerSteal, triggerBlock, canUseSteal,
+    triggerSteal, triggerBlock, triggerShoot, canUseSteal,
     playerShootingState,
     enemyStealState, enemyBlockState,
   } = ctx
@@ -115,6 +114,7 @@ export function initEnemyAI(ctx) {
   // scala: funziona identico su un vettore normalizzato o no, niente
   // bisogno di normalizzare solo per l'angolo)
   function steerToward(dirX, dirZ, delta) {
+    const enemyManipulator = getEnemyManipulator()
     const targetAngle = Math.atan2(dirX, dirZ)
     // updateLocomotionAnimation (RobotBase.js) fa l'interpolazione vera e
     // propria (lerpAngle, stesso smoothing di sempre) e la applica a
@@ -132,7 +132,7 @@ export function initEnemyAI(ctx) {
   // questo il braccio restava congelato all'ultima direzione di marcia
   // invece di puntare davvero il canestro per tutta la durata dell'aim)
   function faceToward(targetPos, delta) {
-    scratchDir.subVectors(targetPos, enemyManipulator.root.position)
+    scratchDir.subVectors(targetPos, getEnemyManipulator().root.position)
     scratchDir.y = 0
     if (scratchDir.lengthSq() < 1) return
     steerToward(scratchDir.x, scratchDir.z, delta)
@@ -148,6 +148,7 @@ export function initEnemyAI(ctx) {
   // sottrazione calcolata per il movimento serve anche per la sterzata,
   // invece di richiederne una seconda identica
   function moveToward(targetPos, delta, faceTarget = targetPos) {
+    const enemyManipulator = getEnemyManipulator()
     scratchDir.subVectors(targetPos, enemyManipulator.root.position)
     scratchDir.y = 0
     const dist = scratchDir.length()
@@ -167,24 +168,17 @@ export function initEnemyAI(ctx) {
     // giocatore), mai enemyManipulator.root
   }
 
-  // stessa identica sequenza del trigger del giocatore (mousedown sinistro
-  // in main.js), solo sui propri oggetti-stato invece che su un evento DOM
-  function triggerShoot() {
-    const [elbowAmp, link1Amp] = dribbleAmplitudesRad(dribbleTuning)
-    enemyShootingState.startElbowOffset = enemyDribbleState.armEase * elbowAmp
-    enemyShootingState.startLink1Offset = enemyDribbleState.armEase * link1Amp
-    enemyShootingState.startGrip = enemyHandlingState.grip
-    enemyShootingState.startTilt = enemyHandlingState.tiltOffset
-    enemyShootingState.phase = 'windup'
-    enemyShootingState.phaseT = 0
-    enemyShootingState.released = false
-    enemyShootingState.hasBounced = false
-    clearAllCollisionCooldowns()
-  }
+  // triggerShoot (avvio windup) arriva da ctx ora — stessa sequenza
+  // condivisa col mousedown del giocatore in main.js, esportata da
+  // ShootingSystem.js (stesso principio già in uso per triggerSteal/
+  // triggerBlock, CombatMoves.js). Le precondizioni (aimTimer/HANDLING)
+  // restano qui, non nella funzione condivisa
 
   function update(delta) {
     const ball = getBasketball()
     if (!ball) return
+    const enemyManipulator = getEnemyManipulator()
+    const playerManipulator = getPlayerManipulator()
 
     // STEAL/BLOCK in corso: niente decisioni di movimento finché non
     // finisce (reach+resolve) — altrimenti il nemico continuava a
@@ -285,7 +279,7 @@ export function initEnemyAI(ctx) {
   // prossimo updateLocomotionAnimation farebbe scivolare visibilmente le
   // ruote dal valore vecchio (lerpAngle) invece di ripartire pulito
   function resetWheelsAngle(angle) {
-    enemyManipulator.locomotionYaw = angle
+    getEnemyManipulator().locomotionYaw = angle
   }
 
   return { update, getState: () => aiState, resetWheelsAngle }

@@ -22,9 +22,11 @@ Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (ma
 
 | Classe | Locomozione | Mossa Speciale | Stato |
 |---|---|---|---|
-| **MANIPULATOR** | Ruote | — | ✅ Implementata, unica giocabile |
-| **LEGGED MANIPULATOR** | Gambe | Jump | 🟨 Modello procedurale + preview 3D live nel Main Menu, non ancora giocabile |
-| **DRONE** | Volo | Uplifting | 🟨 Modello procedurale (bozza) + preview 3D live nel Main Menu, non ancora giocabile |
+| **MOBILE MANIPULATOR** | Ruote | Dash | ✅ Implementata, giocabile |
+| **LEGGED MANIPULATOR** | Gambe (ciclo del passo) | Jump | ✅ Implementata, giocabile |
+| **DRONE** | Volo | Flight | ✅ Implementata, giocabile |
+
+Tutte e 3 le classi sono selezionabili dal Main Menu — sia per il giocatore sia, in 1v1, per l'avversario controllato dall'AI — senza reload di pagina.
 
 ---
 
@@ -39,7 +41,7 @@ Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (ma
 <tr><td>Spectate: click + mouse + WASD + Space/Shift</td><td>Volo libero nella direzione esatta della camera</td></tr>
 <tr><td>Play: click + mouse</td><td>Orbita la camera attorno al robot; il pitch alza/abbassa leggermente il braccio</td></tr>
 <tr><td>Play: WASD</td><td>Muove il robot relativo a dove guarda la camera; le ruote sterzano verso la direzione di marcia, il braccio punta sempre dove guarda la camera</td></tr>
-<tr><td>Play: Shift sinistro</td><td>Dash nella direzione di marcia (cooldown 4s)</td></tr>
+<tr><td>Play: Shift sinistro</td><td>Mossa speciale della classe attiva: Dash (MOBILE MANIPULATOR, cooldown 4s), Jump (LEGGED MANIPULATOR, cooldown 5s), Flight (DRONE, cooldown 17s)</td></tr>
 <tr><td>Play: tasto destro tenuto (solo se si ha la palla)</td><td><code>RobotState.HANDLING</code> — palleggio in pausa, camera a orientamento libero per mirare; non fa nulla se la palla è libera (<code>BallState.FREE</code>)</td></tr>
 <tr><td>Play: click sinistro (in HANDLING)</td><td>Tiro — direzione dal raycast sul crosshair, forza costante (ridotta dentro l'arco dei 3 punti), animazione windup/release/recover</td></tr>
 <tr><td>Play: camminare vicino a una palla libera</td><td>Pickup automatico (nessun tasto) — appena il bounding box del robot tocca la palla, animazione di raccolta rapida e si torna a <code>DRIBBLE</code></td></tr>

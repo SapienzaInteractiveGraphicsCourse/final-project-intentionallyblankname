@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { RobotState } from './robots/RobotBase.js'
 import { BallState } from './Basketball.js'
-import { snapBallToRestPoint, clampOrbitPitchToNormalRange } from './BallPossession.js'
+import { clampOrbitPitchToNormalRange, dribbleAmplitudesRad, getObjectWorldPosition, paddleWorldPos } from './BallPossession.js'
 import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from './constants.js'
 
 // Quarto e ultimo pezzo del refactor modulare: tiro, hoop assist, punteggio
@@ -17,6 +17,13 @@ import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from './constants.js'
 const SHOT_FLOOR_BOUNCE_SPEED_FACTOR = 0.7 // rimbalzo a terra di un tiro sbagliato: vicino a BALL_BOUNCE_SPEED ma un filo più smorzato
 const FLOOR_HORIZONTAL_DAMPING = 0.9
 const THREE_POINT_RADIUS = 677 // distanza reale dal ferro al punto più "alto" dell'arco (accessor GLTF)
+// frazione di windup+release (vedi updateShootAnimation, blend verso
+// releaseOrigin) sotto la quale la palla resta agganciata RIGIDA alla
+// paletta — solo l'ultimo (1-questa) tratto prima del rilascio vero
+// converge verso il punto congelato della preview. 0.85 = la palla sta
+// "in mano" per l'85% dell'animazione, la correzione (rapida ma non
+// istantanea) si vede solo nell'ultimo 15%
+const BLEND_START_FRACTION = 0.85
 const THREE_POINT_SPEED_REDUCTION = 0.6 // forza ridotta al 60% da dentro l'arco: da vicino serve meno spinta
 // campo potenziale attrattivo verso il centro canestro (stat SHOOTING): un
 // tronco di cono che si allarga salendo, raggio del FERRO esattamente al
@@ -107,8 +114,8 @@ export function shootingStatToAssistStrength(shootingStat) {
 
 export function initShootingSystem(ctx) {
   const {
-    manipulator, collisionWorld, sfx, scene,
-    shootingState, shootTuning, cameraState, dribbleState, handlingState,
+    getManipulator, collisionWorld, sfx, scene,
+    shootingState, cameraState, dribbleState, handlingState,
     computeAimPitchOffset, getShotDirection, getBallRadius,
     scoreElementId = 'score-value',
     // funzione (non un valore fisso): in PRACTICE non c'è squadra avversaria
@@ -119,6 +126,12 @@ export function initShootingSystem(ctx) {
     // pagina, prima di qualunque scelta nel menu). null/undefined = nessuna
     // restrizione (comportamento PRACTICE)
     getTargetHoopIndex = () => null,
+    // opzionale: chiamata con QUESTO manipulator ogni volta che segna un
+    // canestro (checkSingleHoopScore) — main.js la usa in 1V1 per il
+    // turnover di possesso (chi ha SUBITO il canestro riparte con la
+    // palla, vera regola del basket), no-op in PRACTICE. ShootingSystem.js
+    // resta agnostico sul game mode: emette solo l'evento, main.js decide
+    onScore = () => {},
   } = ctx
   // getBasketball NON destrutturato: è una funzione, non un valore semplice
   // (main.js assegna basketball in modo asincrono al caricamento del GLTF) —
@@ -154,7 +167,12 @@ export function initShootingSystem(ctx) {
   }
 
   function getEffectiveShotSpeed(worldPosition) {
-    return isInsideThreePointArc(worldPosition, hoopsForArcCheck()) ? shootTuning.shotSpeed * THREE_POINT_SPEED_REDUCTION : shootTuning.shotSpeed
+    // shootTuning: PER ISTANZA (RobotBase.js), non più un unico oggetto
+    // condiviso — ogni classe ha la propria forza/timing di tiro tarabile
+    // indipendentemente (pannello debug, tasto P). resolveShootTuning
+    // sceglie elevatedShootTuning invece mentre isElevated è vero (Drone)
+    const { shotSpeed } = resolveShootTuning(getManipulator())
+    return isInsideThreePointArc(worldPosition, hoopsForArcCheck()) ? shotSpeed * THREE_POINT_SPEED_REDUCTION : shotSpeed
   }
 
   // Point System: 2 punti se si tirava da dentro l'arco dei 3 punti, 3 se da
@@ -194,6 +212,7 @@ export function initShootingSystem(ctx) {
       console.log('%c🏀 CANESTRO!', 'color: orange; font-weight: bold; font-size: 14px')
       addScore(shootingState.wasInsideArc ? 2 : 3)
       sfx.playScore()
+      onScore(getManipulator())
     }
   }
 
@@ -204,6 +223,43 @@ export function initShootingSystem(ctx) {
   const shotCollisionCooldowns = new Map()
   function clearAllCollisionCooldowns() {
     shotCollisionCooldowns.clear()
+  }
+
+  // Avvia il windup del tiro: stessa identica sequenza scritta a mano sia
+  // nel mousedown del giocatore (main.js) sia in EnemyAI.js — condivisa
+  // qui, stesso principio già in uso per STEAL/BLOCK (triggerSteal/
+  // triggerBlock, CombatMoves.js). Le PRECONDIZIONI restano ai chiamanti
+  // (deliberatamente non qui): il giocatore controlla mouse/pointer-lock/
+  // HANDLING/basketball esistente, il nemico un timer di mira/HANDLING —
+  // condizioni davvero diverse, non la stessa guardia duplicata due volte
+  function triggerShoot() {
+    const manipulator = getManipulator()
+    const [elbowAmp, link1Amp] = dribbleAmplitudesRad(manipulator.dribbleTuning)
+    shootingState.startElbowOffset = dribbleState.armEase * elbowAmp
+    shootingState.startLink1Offset = dribbleState.armEase * link1Amp
+    shootingState.startGrip = handlingState.grip
+    shootingState.startTilt = handlingState.tiltOffset
+    shootingState.phase = 'windup'
+    shootingState.phaseT = 0
+    shootingState.timeSinceTrigger = 0
+    shootingState.released = false
+    shootingState.hasBounced = false
+    clearAllCollisionCooldowns()
+    // punto ESATTO da cui la preview di traiettoria stava disegnando
+    // l'arco un istante prima del click (updateTrajectoryPreview legge
+    // ctx.getBasketball().position ogni frame mentre si mira) — congelato
+    // qui, non più letto di nuovo al momento del rilascio fisico vero.
+    // Windup/release muovono il braccio (per ogni classe, non solo
+    // Drone — più o meno a seconda della classe) trascinando la palla
+    // dietro di sé: senza congelare l'origine, il volo reale partiva da
+    // dove la paletta era arrivata DOPO il windup, non da dove la preview
+    // l'aveva disegnato, con uno scarto proporzionale a quanto il windup
+    // sposta il braccio (grande per l'Flight del Drone, segnalato dal
+    // vivo: "verde" ma il tiro non entrava quasi mai). Interfaccia comune
+    // a tutte le classi/entrambi i lati (player/enemy): stessa funzione
+    // triggerShoot, nessuna logica per-classe qui
+    const ball = ctx.getBasketball()
+    if (ball) shootingState.releaseOrigin.copy(ball.position)
   }
 
   const shotVelocity = new THREE.Vector3()
@@ -221,7 +277,7 @@ export function initShootingSystem(ctx) {
     ball.position.addScaledVector(shotVelocity, dt)
     applyHoopAssist(
       ball.position, shotVelocity, dt,
-      shootingStatToAssistStrength(manipulator.stats.shooting),
+      shootingStatToAssistStrength(getManipulator().stats.shooting),
       collisionWorld.hoops, collisionWorld.BACKBOARD_TOP_Y, ctx.rimRingRadius,
     )
 
@@ -278,8 +334,20 @@ export function initShootingSystem(ctx) {
   // tutto il suo raggio nel tempo RIMANENTE, quindi con velocità angolare
   // maggiore: il "colpo di frusta" prossimale→distale di un lancio vero.
   // Infine 'recover' interpola tutto verso una posa neutra
+  // shootTuning: PER ISTANZA (RobotBase.js) — elevatedShootTuning (default
+  // null) sostituisce shootTuning SOLO mentre isElevated è vero (Drone,
+  // Flight): la posa di windup/release che evita di intersecare il
+  // corpo mentre il braccio pende a terra è diversa da quella corretta
+  // mentre il corpo è già sollevato in volo — vedi Drone.js
+  function resolveShootTuning(manipulator) {
+    return (manipulator.isElevated && manipulator.elevatedShootTuning) || manipulator.shootTuning
+  }
+
   function updateShootAnimation(delta) {
+    const manipulator = getManipulator()
+    const shootTuning = resolveShootTuning(manipulator)
     shootingState.phaseT += delta
+    shootingState.timeSinceTrigger += delta
     const elbowWindupTarget = THREE.MathUtils.degToRad(shootTuning.elbowWindupDeg)
     const link1WindupTarget = THREE.MathUtils.degToRad(shootTuning.link1WindupDeg)
     const aimPitchOffset = computeAimPitchOffset()
@@ -383,11 +451,29 @@ export function initShootingSystem(ctx) {
     }
 
     // finché la palla non è ancora partita resta incollata alla paletta,
-    // stessa logica di updateHandling/updateDribble
+    // stessa logica di updateHandling/updateDribble — ma non un aggancio
+    // rigido puro PER TUTTA la durata: negli ultimi istanti prima del
+    // rilascio vero converge verso releaseOrigin (la posizione ESATTA da
+    // cui la preview disegnava l'arco al momento del click, congelata in
+    // triggerShoot), altrimenti il volo vero partiva parallelo ma
+    // SPOSTATO rispetto a quanto mostrato ("verde" ma non entrava).
+    // Bug reale corretto: la prima versione faceva crescere il blend
+    // LINEARMENTE per TUTTO windup+gran parte di release (~90% dell'intera
+    // animazione, non solo l'istante del rilascio) — la palla si staccava
+    // visibilmente dalla paletta per quasi tutta la motion invece di
+    // restare "in mano" (segnalato dal vivo su AMR MANIPULATOR, dove il
+    // windup è ampio). Il blend ora resta a 0 (aggancio rigido puro alla
+    // paletta, "in mano") per la maggior parte del tempo, e cresce da 0 a
+    // 1 solo nell'ULTIMA fetta (BLEND_START_FRACTION) prima del rilascio —
+    // una correzione rapida ma non istantanea, concentrata dove serve
+    // davvero (l'istante vero del rilascio deve combaciare con la preview)
+    // invece di spalmata su tutta l'animazione
     if (!shootingState.released) {
-      // stesso motivo di updateHandling: manipulator.ballRestPoint segue il
-      // vero punto di convergenza della V, corretto per qualunque tilt
-      snapBallToRestPoint(manipulator, ctx.getBasketball())
+      getObjectWorldPosition(manipulator.ballRestPoint, paddleWorldPos)
+      const timeToRelease = shootTuning.windupDuration + shootTuning.releasePoint * shootTuning.releaseDuration
+      const linearT = timeToRelease > 0 ? Math.min(shootingState.timeSinceTrigger / timeToRelease, 1) : 1
+      const originBlend = Math.min(Math.max((linearT - BLEND_START_FRACTION) / (1 - BLEND_START_FRACTION), 0), 1)
+      ctx.getBasketball().position.lerpVectors(paddleWorldPos, shootingState.releaseOrigin, originBlend)
     }
   }
 
@@ -437,6 +523,7 @@ export function initShootingSystem(ctx) {
   const previewCollisionCooldowns = new Map()
 
   function updateTrajectoryPreview() {
+    const manipulator = getManipulator()
     // NOTA: usa la posa di mira ATTUALE (quella che updateHandling ha
     // appena applicato), non quella di rilascio effettivo — un tentativo
     // di simulare la posa di rilascio esatta è stato provato e scartato:
@@ -515,8 +602,12 @@ export function initShootingSystem(ctx) {
 
   return {
     getShotDirection, getEffectiveShotSpeed, isInsideThreePointArc: pos => isInsideThreePointArc(pos, hoopsForArcCheck()),
-    addScore, resetScore, checkHoopScore, clearAllCollisionCooldowns,
+    addScore, resetScore, checkHoopScore, clearAllCollisionCooldowns, triggerShoot,
     updateShotFlight, updateShootAnimation, updateTrajectoryPreview, hideTrajectoryPreview,
     shotVelocity, trajDebug,
+    // letto da main.js dopo ogni onScore per il win-condition check (1V1,
+    // primo a WIN_SCORE punti) — funzione, non un valore, resta corretta
+    // ad ogni chiamata invece di una snapshot congelata alla costruzione
+    getScore: () => score,
   }
 }

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { replaceGeometry, makeScaleSetter, makeLinkGeometry, makeTaperedLinkGeometry, createLinkControls, createColorControls } from './geometryControlHelpers.js'
 
 // --- Texture PBR procedurali (nessun asset esterno) ---
 // Il robot è interamente procedurale (primitive Three.js, niente modelli
@@ -93,7 +94,7 @@ export function drawBrushedMetal(ctx, size, count = 400) {
 
 // pattern "grana gomma/plastica": puntini sparsi di dimensione e luminosità
 // variabili — per wheelMat (gomma ruote) e accentMat (plastica paletta),
-// riusata anche da createLeggedManipulatorRobot() (piedi in gomma)
+// riusata anche da LeggedManipulatorModelMaker() (piedi in gomma)
 export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
   for (let i = 0; i < count; i++) {
     const x = Math.random() * size, y = Math.random() * size
@@ -103,6 +104,23 @@ export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
     ctx.beginPath()
     ctx.arc(x, y, r, 0, Math.PI * 2)
     ctx.fill()
+  }
+}
+
+// armMat/accentMat (braccio 3R/paletta) erano ridefiniti IDENTICI (stesso
+// colore/roughness/metalness/parametri PBR) in tutti e 3 i ModelMaker —
+// a differenza di bodyMat/wheelMat/legMat/footMat/skidMat, che DIFFERISCONO
+// davvero da classe a classe (tinte/roughness diverse per corpo/gomma/
+// pattino) e restano quindi locali a ognuno. Estratti qui (non in un file
+// a parte) perché AMRManipulatorModelMaker.js è già il modulo "sorgente"
+// di createProceduralPBRMaps/drawBrushedMetal/drawOrganicGrain, importato
+// dagli altri due
+export function createArmAccentMaterials() {
+  const armMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
+  const accentMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 1400, 1.4), baseRoughness: 0.3, roughnessVariation: 0.1 })
+  return {
+    armMat: new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.4, metalness: 0.5, normalMap: armMaps.normalMap, roughnessMap: armMaps.roughnessMap }),
+    accentMat: new THREE.MeshStandardMaterial({ color: 0xe8942c, roughness: 0.3, metalness: 0.3, normalMap: accentMaps.normalMap, roughnessMap: accentMaps.roughnessMap }),
   }
 }
 
@@ -116,20 +134,17 @@ export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
 // radius vanno ricostruite (dispose + nuova geometry) a ogni cambio. La
 // posizione dei giunti a valle (gomito/polso) dipende dalla lunghezza del
 // link a monte e va ricalcolata quando questa cambia.
-export function createManipulatorRobot() {
+export function AMRManipulatorModelMaker() {
   const root = new THREE.Group()
 
   // baseRoughness passato a createProceduralPBRMaps combacia col roughness
   // "piatto" del materiale: la roughness map poi ci varia sopra, non lo sostituisce
   const bodyMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
   const wheelMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 900, 2.5), baseRoughness: 0.8, roughnessVariation: 0.15 })
-  const armMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
-  const accentMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 1400, 1.4), baseRoughness: 0.3, roughnessVariation: 0.1 })
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.4, normalMap: bodyMaps.normalMap, roughnessMap: bodyMaps.roughnessMap })
   const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.1, normalMap: wheelMaps.normalMap, roughnessMap: wheelMaps.roughnessMap })
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.4, metalness: 0.5, normalMap: armMaps.normalMap, roughnessMap: armMaps.roughnessMap })
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0xe8942c, roughness: 0.3, metalness: 0.3, normalMap: accentMaps.normalMap, roughnessMap: accentMaps.roughnessMap })
+  const { armMat, accentMat } = createArmAccentMaterials()
 
   // stato corrente dei parametri modificabili da debug, usato sia per
   // ricostruire le geometrie sia per COPY config. Valori di partenza presi
@@ -197,25 +212,8 @@ export function createManipulatorRobot() {
   const baseJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius, 16, 16), armMat)
   base.add(baseJoint)
 
-  function makeLinkGeometry(length, thickness) {
-    const geo = new THREE.BoxGeometry(thickness, length, thickness)
-    geo.translate(0, length / 2, 0) // pivot all'estremità inferiore
-    return geo
-  }
-
-  // link rastremato (base ≠ punta): CylinderGeometry con radialSegments=4
-  // è un prisma a base quadrata invece che rotondo; top/bottom radius
-  // diversi = tronco di piramide, cioè un parallelepipedo trapezoidale.
-  // radius = thickness/√2 per far coincidere la larghezza faccia-a-faccia
-  // (non spigolo-a-spigolo) con lo spessore, coerente col BoxGeometry
-  function makeTaperedLinkGeometry(length, baseThickness, tipThickness) {
-    const rBase = baseThickness / Math.SQRT2
-    const rTip = tipThickness / Math.SQRT2
-    const geo = new THREE.CylinderGeometry(rTip, rBase, length, 4)
-    geo.rotateY(Math.PI / 4) // allinea le facce piatte agli assi X/Z
-    geo.translate(0, length / 2, 0) // pivot all'estremità inferiore (base)
-    return geo
-  }
+  // makeLinkGeometry/makeTaperedLinkGeometry ora in geometryControlHelpers.js
+  // (condivise dai 3 ModelMaker, robot-agnostiche — vedi import in cima)
 
   // link1Group: giunto di "spalla" in più oltre al 3R nominale (che resta
   // base→link1→gomito→link2→polso). Serve solo a dare a link1 una leggera
@@ -397,72 +395,35 @@ export function createManipulatorRobot() {
   applyWheelsGroupScale()
   syncChassisHeight()
 
-  // dispose + riassegna: le geometrie non sono ridimensionabili "in place"
-  function replaceGeometry(mesh, newGeo) {
-    mesh.geometry.dispose()
-    mesh.geometry = newGeo
-  }
-
-  // setter "scale" generico: stessa forma per disc/link1/link2/giunti,
-  // cambia solo la state-key e la mesh target
-  function makeScaleSetter(key, mesh) {
-    return s => {
-      state[key] = s
-      mesh.scale.setScalar(s)
-    }
-  }
-
-  // genera Scale/Length/Thickness(+TipThickness) per un link, parametrico
-  // su mesh, funzione di geometria e giunto a valle da riposizionare —
-  // link1 e link2 differiscono solo per questi 4 argomenti
-  function createLinkControls({ statePrefix, mesh, downstreamJoint, buildGeometry, thicknessNames }) {
-    const lengthKey = `${statePrefix}Length`
-    function rebuild() {
-      const thicknessArgs = thicknessNames.map(name => state[`${statePrefix}${name}`])
-      replaceGeometry(mesh, buildGeometry(state[lengthKey], ...thicknessArgs))
-    }
-    const linkControls = {
-      [`${statePrefix}Scale`]: makeScaleSetter(`${statePrefix}Scale`, mesh),
-      [lengthKey](l) {
-        state[lengthKey] = l
-        rebuild()
-        downstreamJoint.position.y = l
-      },
-    }
-    thicknessNames.forEach(name => {
-      linkControls[`${statePrefix}${name}`] = t => {
-        state[`${statePrefix}${name}`] = t
-        rebuild()
-      }
-    })
-    return linkControls
-  }
+  // replaceGeometry/makeScaleSetter/createLinkControls ora in
+  // geometryControlHelpers.js (condivise dai 3 ModelMaker) — prendono
+  // `state` esplicito come primo argomento invece di chiuderlo
 
   const controls = {
-    manipulatorScale: makeScaleSetter('manipulatorScale', root),
+    manipulatorScale: makeScaleSetter(state, 'manipulatorScale', root),
     wheelsScale(s) {
       state.wheelsScale = s
       applyWheelsGroupScale()
       syncChassisHeight()
     },
-    discScale: makeScaleSetter('discScale', disc),
+    discScale: makeScaleSetter(state, 'discScale', disc),
     discRadius(r) {
       state.discRadius = r
       replaceGeometry(disc, new THREE.CylinderGeometry(r, r, discHeight, 32))
       applyWheelsGroupScale()
       syncChassisHeight()
     },
-    ...createLinkControls({
+    ...createLinkControls(state, {
       statePrefix: 'link1', mesh: link1, downstreamJoint: elbow,
       buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'],
     }),
-    ...createLinkControls({
+    ...createLinkControls(state, {
       statePrefix: 'link2', mesh: link2, downstreamJoint: wrist,
       buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'],
     }),
-    baseJointScale: makeScaleSetter('baseJointScale', baseJoint),
-    elbowJointScale: makeScaleSetter('elbowJointScale', elbowJoint),
-    endEffectorScale: makeScaleSetter('endEffectorScale', endEffector),
+    baseJointScale: makeScaleSetter(state, 'baseJointScale', baseJoint),
+    elbowJointScale: makeScaleSetter(state, 'elbowJointScale', elbowJoint),
+    endEffectorScale: makeScaleSetter(state, 'endEffectorScale', endEffector),
 
     // --- Posa (mira/sterzata), non tracciata in state: cambia ogni frame,
     // non è pensata per "Copy config" come le dimensioni sopra ---
@@ -521,6 +482,7 @@ export function createManipulatorRobot() {
     setWheelsYaw(angle) {
       wheelsGroup.rotation.y = angle
     },
+    ...createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }),
   }
 
   // applica gli scale iniziali (disc/link1/link2/giunti) richiamando gli

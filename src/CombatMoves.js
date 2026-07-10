@@ -30,19 +30,24 @@ import { angleToForward } from './mathUtils.js'
 // riprendibile subito), niente canestro. L'arm (yaw base) punta dritto
 // verso la palla per tutta la reach, non una posa fissa.
 // cooldown dipendente dalla stat STEAL/BLOCK del robot che esegue la mossa
-// (scala 1-5, vedi MANIPULATOR_STATS in ManipulatorRobot.js) — più alto lo
-// stat, più corto il cooldown. Formula lineare scelta a mano: STEAL
-// 11-STEAL (1->10s, 3->8s, 5->6s, il vecchio fisso 10s era di fatto lo stat
-// minimo), BLOCK 7-BLOCK stessa forma, range più stretto perché il vecchio
-// fisso (5s) era già più basso di quello di STEAL.
+// (scala 1-5, vedi MANIPULATOR_STATS in AMRManipulator.js) — più alto lo
+// stat, più corto il cooldown. STEAL: valori scelti a mano, non una
+// progressione lineare/esponenziale pulita (differenze -1,-1,-0.5,-0.5),
+// quindi una tabella invece di una formula forzata. BLOCK resta 7-BLOCK
+// (lineare, mai richiesto di cambiare)
+const STEAL_COOLDOWN_BY_STAT = { 1: 6, 2: 5, 3: 4, 4: 3.5, 5: 3 }
 // esportate (non solo interne): main.js le usa per calcolare la percentuale
 // di riempimento delle barre HUD (stesso schema di DASH_COOLDOWN_TIME)
-export function stealCooldownFor(stealStat) { return 11 - stealStat }
+export function stealCooldownFor(stealStat) { return STEAL_COOLDOWN_BY_STAT[stealStat] }
 export function blockCooldownFor(blockStat) { return 7 - blockStat }
-// appena derubati, niente steal-back immediato per un po' — senza,
-// chi non aveva mai usato STEAL prima (cooldown ancora a 0) poteva
-// rubarla indietro nello stesso istante
-const VICTIM_STEAL_LOCKOUT = 2
+// appena derubati, niente steal-back immediato per un po' — senza, chi non
+// aveva mai usato STEAL prima (cooldown ancora a 0) poteva rubarla indietro
+// nello stesso istante. Dipendente dallo stat STEAL della VITTIMA (più alto
+// lo stat, più in fretta si riprende e può ritentare) — stessa tabella che
+// STEAL_COOLDOWN_BY_STAT usava prima di questa modifica, riusata qui invece
+// di un flat 2s uguale per tutti
+const VICTIM_STEAL_LOCKOUT_BY_STAT = { 1: 4, 2: 3, 3: 2, 4: 1.5, 5: 1 }
+function victimStealLockoutFor(stealStat) { return VICTIM_STEAL_LOCKOUT_BY_STAT[stealStat] }
 const STEAL_REACH_DURATION = 0.4
 const BLOCK_REACH_DURATION = 0.375 // rallentata del 20% (velocità all'80% di quella originale, 0.3s)
 // tempo di rientro della posa (allungo → neutro) dopo successo O fallimento
@@ -53,16 +58,22 @@ const RESOLVE_DURATION = 0.2
 // (resolveAimYaw, non l'avversario): FORWARD è il vero "allungo" davanti
 // (dove punta/spazza il braccio), BACKWARD è il margine alle spalle dello
 // stealer — quasi a zero apposta, praticamente serve il corpo vero per
-// rubare da lì. Esportate insieme a BLOCK_CONTACT_RADIUS: CollisionDebugView.js
+// rubare da lì. Esportate insieme a blockBoxHalfSizeFor: CollisionDebugView.js
 // le disegna come wireframe (tasti 6/7) per poterle ispezionare a occhio,
 // stessi identici valori usati qui per la logica vera
 export const STEAL_FORWARD_MARGIN = 90
 export const STEAL_BACKWARD_MARGIN = 20
-// raggio di contatto paletta-palla per BLOCK (bersaglio in volo, un po'
-// permissivo — tiro veloce, non c'è tempo di essere precisi). Ridotto da
-// 100: a quel raggio si veniva bloccati anche da distanze visivamente
-// assurde, molto oltre la reale portata del braccio
-export const BLOCK_CONTACT_RADIUS = 55
+// cubo di collisione dedicato all'END EFFECTOR per BLOCK — sostituisce il
+// vecchio raggio di contatto sferico fisso (paletta-vs-palla): dimensione
+// scalata sulla stat BLOCK di CHI ESEGUE la mossa (1-5). Livello 1 =
+// dimensione base (contiene solo l'end effector), +20%/livello fino a
+// +80% a livello 5 — esportata insieme alla base: CollisionDebugView.js
+// (tasto 7) disegna lo STESSO cubo usato qui per il contatto vero, non
+// un'approssimazione a parte
+export const BLOCK_BOX_BASE_HALF_SIZE = 30
+export function blockBoxHalfSizeFor(blockStat) {
+  return BLOCK_BOX_BASE_HALF_SIZE * (1 + 0.2 * (blockStat - 1))
+}
 const STEAL_ELBOW_DEG = -70
 const STEAL_LINK1_DEG = 50
 const STEAL_SWEEP_AMPLITUDE_DEG = 50 // ampiezza dello spazzolamento base, da -X a +X gradi attorno alla direzione attuale
@@ -89,14 +100,19 @@ export function isCombatMoveActive(stealState, blockState) {
 
 export function initCombatMoves(ctx) {
   const {
-    manipulator, otherManipulator, resetDribbleState, otherResetDribbleState,
-    dribbleTuning, dribbleState, getBasketball, otherShootingState, otherDashState, sfx,
+    getManipulator, getOtherManipulator, resetDribbleState, otherResetDribbleState,
+    dribbleState, getBasketball, otherShootingState, otherDashState, sfx,
     otherHandlingState, otherStealState, otherPickupState, shootingState,
     pickupState, handlingState,
     // opzionale: da dove sta mirando questo robot, per il pivot dello
     // sweep di STEAL — il giocatore la passa (crosshair/orbit camera), il
     // nemico non ce l'ha (niente camera), ripiega sulle ruote
     getAimYaw,
+    // raggio vero del pallone — serve al test sfera(palla)-vs-box(BLOCK),
+    // vedi isBallInBlockBox sotto. Funzione, non un valore snapshot: resta
+    // regolabile da debug panel a runtime (stesso principio di getBallRadius
+    // già usato altrove nel progetto)
+    getBallRadius,
     // stealState/blockState: SEMPRE passati da main.js (mai creati qui
     // dentro) — stealState del NEMICO deve essere leggibile dall'istanza
     // del GIOCATORE (otherStealState, per il lockout anti-steal-back) e
@@ -121,9 +137,9 @@ export function initCombatMoves(ctx) {
   // l'avversario si sposta lateralmente, invece di uno scatto secco al
   // superamento dei 90°
   function isTouchingOpponentBox() {
-    scratchOpponentBox.setFromObject(otherManipulator.root)
-    scratchOpponentBox.clampPoint(manipulator.root.position, scratchNearestOnOpponent)
-    scratchStealDelta.subVectors(scratchNearestOnOpponent, manipulator.root.position)
+    getOtherManipulator().getBodyBox(scratchOpponentBox)
+    scratchOpponentBox.clampPoint(getManipulator().root.position, scratchNearestOnOpponent)
+    scratchStealDelta.subVectors(scratchNearestOnOpponent, getManipulator().root.position)
     scratchStealDelta.y = 0
     const dist = scratchStealDelta.length()
     if (dist < 1e-4) return true // già dentro il vero corpo dell'avversario
@@ -162,7 +178,7 @@ export function initCombatMoves(ctx) {
     // rubabile mentre in realtà sta ancora raccogliendola: due robot
     // avrebbero finito per contendersi la posizione della palla
     const otherIsPickingUp = otherPickupState && otherPickupState.phase === 'active'
-    return !!ball && ball.owner === otherManipulator && ball.state === BallState.HANDLED
+    return !!ball && ball.owner === getOtherManipulator() && ball.state === BallState.HANDLED
       && otherShootingState.phase === 'idle' && !otherIsDashing && !otherIsPickingUp
   }
 
@@ -171,6 +187,7 @@ export function initCombatMoves(ctx) {
   // BLOCK per seguire la palla in volo. Non aggiorna nulla se troppo
   // vicino (direzione degenere, evita un atan2(0,0))
   function aimBaseToward(worldPos) {
+    const manipulator = getManipulator()
     scratchAimDir.subVectors(worldPos, manipulator.root.position)
     scratchAimDir.y = 0
     if (scratchAimDir.lengthSq() < 1) return
@@ -178,11 +195,23 @@ export function initCombatMoves(ctx) {
   }
 
   const scratchPaddlePos = new THREE.Vector3()
-  // BLOCK resta un bersaglio preciso (paletta-vs-palla, non box): il tiro
-  // in volo è veloce, un box grande quanto il robot lo renderebbe troppo
-  // facile — il raggio generoso (BLOCK_CONTACT_RADIUS) basta già
   function paddleWorldPosition() {
-    return getObjectWorldPosition(manipulator.paddle, scratchPaddlePos)
+    return getObjectWorldPosition(getManipulator().paddle, scratchPaddlePos)
+  }
+
+  // sfera(palla)-vs-box(END EFFECTOR), stesso principio di clampPoint già
+  // usato da isTouchingOpponentBox/CollisionWorld — il box è centrato sulla
+  // paletta, mezzo-lato dato da blockBoxHalfSizeFor(stat BLOCK di chi tenta
+  // il blocco), non un raggio fisso uguale per tutti come prima
+  const scratchBlockBox = new THREE.Box3()
+  const scratchBlockClamped = new THREE.Vector3()
+  function isBallInBlockBox(ballPosition) {
+    const center = paddleWorldPosition()
+    const halfSize = blockBoxHalfSizeFor(getManipulator().stats.block)
+    scratchBlockBox.min.set(center.x - halfSize, center.y - halfSize, center.z - halfSize)
+    scratchBlockBox.max.set(center.x + halfSize, center.y + halfSize, center.z + halfSize)
+    scratchBlockBox.clampPoint(ballPosition, scratchBlockClamped)
+    return scratchBlockClamped.distanceTo(ballPosition) <= getBallRadius()
   }
 
   // usabile solo senza palla, non durante un'altra STEAL/BLOCK già in corso
@@ -196,7 +225,7 @@ export function initCombatMoves(ctx) {
   // (setDribbleOffsets) — STEAL/BLOCK partendo insieme si sarebbero
   // contesi i joint ogni frame invece di stare fermi finché l'altra non finisce
   function canTrigger(moveState) {
-    return manipulator.state === RobotState.NO_BALL
+    return getManipulator().state === RobotState.NO_BALL
       && stealState.phase === 'idle' && blockState.phase === 'idle'
       && pickupState.phase === 'idle' && shootingState.phase === 'idle'
       && moveState.cooldown <= 0
@@ -211,11 +240,11 @@ export function initCombatMoves(ctx) {
   // pivot dello sweep (inizio reach) sia per il bersaglio di rientro
   // (fine sweep/resolve) — prima la stessa espressione ripetuta in due punti
   function resolveAimYaw() {
-    return getAimYaw ? getAimYaw() : manipulator.wheelsGroup.rotation.y
+    return getAimYaw ? getAimYaw() : getManipulator().wheelsGroup.rotation.y
   }
 
   function startReach(moveState) {
-    const [elbowAmp, link1Amp] = dribbleAmplitudesRad(dribbleTuning)
+    const [elbowAmp, link1Amp] = dribbleAmplitudesRad(getManipulator().dribbleTuning)
     moveState.phase = 'reach'
     moveState.phaseT = 0
     moveState.startElbow = dribbleState.armEase * elbowAmp
@@ -252,6 +281,7 @@ export function initCombatMoves(ctx) {
   // aver già cambiato le cose, si ricontrolla lo stato reale invece di
   // assumerlo
   function finishResolve() {
+    const manipulator = getManipulator()
     if (manipulator.state === RobotState.NO_BALL) {
       const ball = getBasketball()
       if (ball && ball.owner === manipulator) {
@@ -267,6 +297,8 @@ export function initCombatMoves(ctx) {
   }
 
   function updateSteal(delta) {
+    const manipulator = getManipulator()
+    const otherManipulator = getOtherManipulator()
     if (stealState.cooldown > 0) stealState.cooldown -= delta
     if (stealState.phase === 'idle') return
     stealState.phaseT += delta
@@ -324,10 +356,11 @@ export function initCombatMoves(ctx) {
             otherHandlingState.grip = 0
             otherHandlingState.tiltOffset = 0
             otherManipulator.controls.setGrip(0)
-            // lockout anti-steal-back: appena derubato, 2s prima di poter
-            // ritentare uno STEAL — senza, con cooldown a 0 (mai usato
-            // prima) poteva rubarla indietro nello stesso istante
-            otherStealState.cooldown = Math.max(otherStealState.cooldown, VICTIM_STEAL_LOCKOUT)
+            // lockout anti-steal-back: appena derubato, un po' di tempo
+            // (in base al PROPRIO stat STEAL) prima di poter ritentare —
+            // senza, con cooldown a 0 (mai usato prima) poteva rubarla
+            // indietro nello stesso istante
+            otherStealState.cooldown = Math.max(otherStealState.cooldown, victimStealLockoutFor(otherManipulator.stats.steal))
             sfx.playSteal()
           }
         }
@@ -361,6 +394,7 @@ export function initCombatMoves(ctx) {
   }
 
   function updateBlock(delta) {
+    const manipulator = getManipulator()
     if (blockState.cooldown > 0) blockState.cooldown -= delta
     if (blockState.phase === 'idle') return
     blockState.phaseT += delta
@@ -379,7 +413,7 @@ export function initCombatMoves(ctx) {
       // la palla si muove sotto gli occhi
       if (ball) aimBaseToward(ball.position)
       if (ball && ball.state === BallState.FREE_SHOT) {
-        if (paddleWorldPosition().distanceTo(ball.position) <= BLOCK_CONTACT_RADIUS) {
+        if (isBallInBlockBox(ball.position)) {
           // deviato: nessun owner assegnato, "sporca" e riprendibile subito
           // da chiunque — niente canestro (il volo non arriva mai a segno)
           ball.setState(BallState.FREE)
