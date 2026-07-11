@@ -290,7 +290,8 @@ export function AMRManipulatorModelMaker()
   link1Group.add(link1)
 
 
-  const ELBOW_REST_PITCH = Math.PI / 2.4 // Resting is slightly bent 
+  const ELBOW_REST_PITCH = Math.PI / 2.4 // Resting is slightly bent
+  const elbow = new THREE.Group()
   elbow.position.y = state.link1Length
   elbow.rotation.x = ELBOW_REST_PITCH
   link1Group.add(elbow)

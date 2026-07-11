@@ -2,36 +2,38 @@ import * as THREE from 'three'
 import { createProceduralPBRMaps, drawBrushedMetal, drawOrganicGrain, createArmAccentMaterials } from './AMRManipulatorModelMaker.js'
 import { replaceGeometry, makeScaleSetter, makeLinkGeometry, makeTaperedLinkGeometry, createLinkControls, createColorControls } from './geometryControlHelpers.js'
 
-// Classe LEGGED MANIPULATOR: stesso modello del MANIPULATOR a ruote (stesso
-// disco, stesso manipolatore 3R per palleggio/tiro — quella parte non
-// cambia, letteralmente lo stesso codice), 25% più grande nel complesso
-// (manipulatorScale), con le ruote sostituite da 4 gambe. Ogni gamba è un
-// braccio R2 (anca + ginocchio, entrambi pitch attorno a un asse orizzontale
-// — niente terzo giunto/polso, non serve: l'end effector non impugna nulla)
-// che termina in un piede: un plane piatto con lo snodo sul bordo (non al
-// centro), come una vera caviglia attaccata al retro della pianta del piede
-// invece che al centro della suola. Lunghezza dei link di gamba = 35% dei
-// link del braccio 3R (coscia da link1Length, stinco da link2Length) —
-// un rapporto di design, non un vincolo live: i default sono numeri fissi
-// calcolati una volta, non ricalcolati se il braccio cambia da debug panel
-// (stesso principio di MANIPULATOR: i suoi numeri erano anch'essi tarati a
-// occhio e poi congelati come default).
+// LEGGED MANIPULATOR: same disc + same 3R arm as AMR (identical code), scaled
+// 25% bigger overall. Wheels replaced by 4 legs, each a 2-joint (hip+knee,
+// both pitch) leg ending in a foot — no ankle/wrist joint needed, nothing to
+// grip. Leg links are 35% of the arm's link lengths (fixed ratio, tuned once).
 //
-// wheelsGroup/controls.setWheelsYaw: il resto del gioco (main.js/EnemyAI.js/
-// CombatMoves.js) orienta la locomozione tramite queste chiavi generiche
-// (vedi RobotBase.updateLocomotionAnimation) assumendo un solo gruppo
-// rigido da ruotare — qui la chiave "wheelsGroup" punta al gruppo delle
-// gambe (`legsGroup`), non a delle ruote vere: stesso contratto, interno
-// diverso. Finché le gambe non hanno un vero ciclo di passo (Section 4:
-// Animation Tweaks), l'intero gruppo pivota rigidamente verso la direzione
-// di marcia — un placeholder onesto, non un vero "cammino", ma visivamente
-// comprensibile e a costo zero rispetto a MANIPULATOR.
-export function LeggedManipulatorModelMaker() {
+// wheelsGroup/setWheelsYaw: kept as the shared contract name (RobotBase/
+// EnemyAI/CombatMoves all orient locomotion via this key) even though it
+// points at legsGroup here, not real wheels. No real step cycle yet, the
+// whole leg group pivots rigidly toward the movement direction.
+
+
+export function LeggedManipulatorModelMaker() 
+{
+  /*
+  Returns a 3D model of a legged manipulator robot, including its geometry, materials, 
+  and controls for manipulating its parts. The model consists of a disc-shaped chassis, a 3R arm,
+   and four legs with hip and knee joints. The function also provides methods to adjust the robot's configuration, 
+   such as scaling, joint angles, and paddle tilt.
+
+  The returned object contains:
+  - root: The root THREE.Group containing the entire robot model.
+  - wheelsGroup: A reference to the legs group (used for locomotion orientation).
+  - joints: An object containing references to the base, elbow, and wrist joints of the arm.
+  - paddle: A reference to the paddle center object.
+  - ballRestPoint: A reference to the ball rest point object.
+  - controls: An object containing methods to manipulate the robot's configuration.
+  - getConfig: A method to retrieve the current configuration state of the robot.
+  - getPaddleTilt: A method to retrieve the current paddle tilt value.
+  */
   const root = new THREE.Group()
 
-  // stessi materiali/texture procedurali di MANIPULATOR (stessa famiglia
-  // visiva) + un materiale gomma dedicato ai piedi (stesso pattern di
-  // wheelMat, riusa drawOrganicGrain esportata da manipulator.js)
+  // Same material family as AMR + a dedicated rubber-ish material for feet
   const bodyMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
   const legMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
   const footMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 900, 2.5), baseRoughness: 0.85, roughnessVariation: 0.15 })
@@ -41,11 +43,9 @@ export function LeggedManipulatorModelMaker() {
   const footMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.85, metalness: 0.1, normalMap: footMaps.normalMap, roughnessMap: footMaps.roughnessMap })
   const { armMat, accentMat } = createArmAccentMaterials()
 
-  // stato: stessi campi/stessi default di MANIPULATOR per disco+braccio 3R
-  // (vedi manipulator.js — "stesso modello"), manipulatorScale 25% più
-  // grande (45 * 1.25), più i campi dedicati alle gambe
+  // Same fields/defaults as AMR for disc+arm, manipulatorScale 25% bigger (45*1.25), plus leg fields
   const state = {
-    manipulatorScale: 56.25, // 45 * 1.25 — 25% più grande dell'AMR, "stesso modello"
+    manipulatorScale: 56.25, // 45 * 1.25
     legsScale: 1,
     discScale: 0.9,
     discRadius: 1,
@@ -64,58 +64,38 @@ export function LeggedManipulatorModelMaker() {
   }
   const INITIAL_DISC_RADIUS = state.discRadius
 
-  // --- Gambe: 4 bracci R2 (anca+ginocchio) al posto delle ruote ---
-  // NON più gli stessi offset delle ruote di MANIPULATOR (0.9,0.9 — raggio
-  // diagonale ≈1.27, oltre discRadius=1: il giunto anca sporgeva ben fuori
-  // dal bordo del disco). Qui invece il giunto (raggio legJointRadius=0.16,
-  // sotto) deve stare TUTTO dentro il disco: raggio diagonale ≈0.78 + 0.16
-  // di giunto ≈0.94 < discRadius=1, con margine. Lunghezza link = 35% dei
-  // link del braccio 3R sopra
+  // --- Legs: 4 hip+knee arms replacing the wheels ---
+  // Hip joint radius must fit inside the disc (diagonal offset + joint radius < discRadius)
   const LEG_OFFSET_X = 0.55
   const LEG_OFFSET_Z = 0.55
-  const legLink1Length = state.link1Length * 0.35 // coscia
-  const legLink2Length = state.link2Length * 0.35 // stinco
+  const legLink1Length = state.link1Length * 0.35 // thigh
+  const legLink2Length = state.link2Length * 0.35 // shin
   const legLink1Thickness = 0.16
   const legLink2Thickness = 0.14
   const legJointRadius = 0.16
-  // anca dritta verso il basso (180°: 0° sarebbe "su") — lo splay
-  // precedente (150°, 30° corti rispetto a dritta) faceva sembrare le
-  // gambe piegate verso l'ESTERNO (lontano dal corpo) invece che dritte;
-  // ginocchio la richiude parzialmente (-30°) verso la verticale, "zampa"
-  // invece di "bastone dritto". Angoli di riposo fissi per ora (nessuna
-  // animazione di passo, vedi commento in cima al file) — quando arriverà
-  // un vero ciclo di camminata questi diventano il punto di partenza
-  // dell'interpolazione
+
+
+  // Hip points straight down (180°), knee folds it back inward (+30°) reads as a leg, not a straight rod
+
   const HIP_REST_PITCH = THREE.MathUtils.degToRad(180)
-  // segno invertito (+30 invece di -30): con -30 il ginocchio piegava lo
-  // stinco verso l'ESTERNO (lontano dal corpo, in continuità con l'anca
-  // ormai dritta) — dovrebbe piegare verso l'INTERNO invece, come un vero
-  // ginocchio/gomito di zampa
   const KNEE_REST_PITCH = THREE.MathUtils.degToRad(30)
-  // ampiezza dell'oscillazione anca durante il trot (setLegWalkCycle sotto)
-  // — valore di partenza, non tarato a occhio: primo giro di tuning
-  // visivo ancora da fare (stesso spirito di Jump/Flight)
+
+  // Hip swing amplitude during trot (setLegWalkCycle below) — first-pass value, not yet visually tuned
   const WALK_SWING_AMPLITUDE = 0.3
 
-  // makeLinkGeometry ora in geometryControlHelpers.js (condivisa dai 3
-  // ModelMaker) — riusata qui sia per le gambe (anca/ginocchio) sia più
-  // sotto per link1 del braccio, stesso identico pivot all'estremità
-
-  // altezza (world, pre-manipulatorScale) da dove si aggancia l'anca fino a
-  // terra, derivata dalla vera geometria delle gambe (coscia+stinco alla
-  // loro posa di riposo) — MAI un valore fisso a occhio, stesso principio
-  // di syncChassisHeight in manipulator.js (lì derivato dal raggio ruota)
-  function computeStandHeight() {
+  // Stand height (world, pre-manipulatorScale): derived from real leg geometry at rest pose, not a fixed guess
+  function computeStandHeight() 
+  {
     return legLink1Length * -Math.cos(HIP_REST_PITCH)
       + legLink2Length * -Math.cos(HIP_REST_PITCH + KNEE_REST_PITCH)
   }
-  const standHeight = computeStandHeight()
+  const standHeight = computeStandHeight() // world Y of the top of the hip joint, pre-manipulatorScale
 
   const legsGroup = new THREE.Group()
   const feet = []
-  // riferimenti anca/ginocchio per gamba — servono a setLegBend() sotto
-  // (Jump: le gambe si accovacciano prima dello scatto e si estendono
-  // durante il salto), non solo alla costruzione iniziale
+ 
+  
+  // Four legs, each with a hip and knee joint, positioned at the corners of the disc
   const legs = []
   const legOffsets = [
     [-LEG_OFFSET_X, -LEG_OFFSET_Z],
@@ -123,20 +103,18 @@ export function LeggedManipulatorModelMaker() {
     [-LEG_OFFSET_X, LEG_OFFSET_Z],
     [LEG_OFFSET_X, LEG_OFFSET_Z],
   ]
-  for (let legIndex = 0; legIndex < legOffsets.length; legIndex++) {
+
+  // Build each leg with hip and knee joints, and add them to the legs group
+  for (let legIndex = 0; legIndex < legOffsets.length; legIndex++) 
+  {
     const [x, z] = legOffsets[legIndex]
-    // orientamento fisso verso l'esterno (stesso verso di angleToForward:
-    // yaw=0 → +Z), così anca/ginocchio (che ruotano solo su X, come
-    // gomito/polso del braccio 3R) piegano la gamba radialmente lontano dal
-    // corpo invece che tutte nella stessa direzione assoluta — 4 gambe che
-    // sembrano davvero irradiarsi dai 4 angoli, non 4 copie identiche
-    const outwardYaw = Math.atan2(x, z)
+    const outwardYaw = Math.atan2(x, z) // Angle to face outward from the center of the disc
     const hipYaw = new THREE.Group()
     hipYaw.position.set(x, standHeight, z)
     hipYaw.rotation.y = outwardYaw
     legsGroup.add(hipYaw)
 
-    // R2 primo giunto: anca, pitch
+    // Hip joint, pitch
     const hip = new THREE.Group()
     hip.rotation.x = HIP_REST_PITCH
     hipYaw.add(hip)
@@ -145,8 +123,7 @@ export function LeggedManipulatorModelMaker() {
     const thigh = new THREE.Mesh(makeLinkGeometry(legLink1Length, legLink1Thickness), legMat)
     hip.add(thigh)
 
-    // R2 secondo giunto: ginocchio, pitch (si somma all'anca, stesso asse —
-    // identico principio del gomito/polso del braccio 3R)
+    // Knee joint, pitch (adds onto hip's, same axis — same idea as elbow/wrist on the 3R arm)
     const knee = new THREE.Group()
     knee.position.y = legLink1Length
     knee.rotation.x = KNEE_REST_PITCH
@@ -156,24 +133,16 @@ export function LeggedManipulatorModelMaker() {
     const shin = new THREE.Mesh(makeLinkGeometry(legLink2Length, legLink2Thickness), legMat)
     knee.add(shin)
 
-    // Piede: plane piatto (BoxGeometry sottile, non PlaneGeometry — stesso
-    // stile del resto del robot, dà anche un minimo di spessore/volto per
-    // l'ombreggiatura) con lo snodo (caviglia) sul BORDO invece che al
-    // centro — stessa tecnica del paddle in manipulator.js
-    // (geo.translate sul bordo lungo): la caviglia sta al centro del lato
-    // corto "posteriore", la pianta si estende in avanti da lì, come un
-    // vero piede invece di un disco centrato sotto la caviglia
+    // Foot: flat box, ankle pivot on the back edge instead of centered — like a real ankle/sole
     const footLength = 0.55
     const footWidth = 0.32
     const footThickness = 0.04
     const footGeo = new THREE.BoxGeometry(footWidth, footThickness, footLength)
     footGeo.translate(0, 0, footLength / 2)
     const ankle = new THREE.Group()
-    ankle.position.y = legLink2Length
-    // livella il piede rispetto al cumulo di pitch anca+ginocchio (stesso
-    // principio di levelPaddle() in manipulator.js: le rotazioni sullo
-    // stesso asse si sommano lungo la catena, senza contro-rotazione la
-    // pianta erediterebbe l'inclinazione invece di restare piatta a terra)
+    ankle.position.y = legLink2Length // position at the end of the shin
+
+    // Counter-rotate to level the foot against the accumulated hip+knee pitch (same idea as levelPaddle())
     ankle.rotation.x = -(HIP_REST_PITCH + KNEE_REST_PITCH)
     knee.add(ankle)
     const foot = new THREE.Mesh(footGeo, footMat)
@@ -183,7 +152,7 @@ export function LeggedManipulatorModelMaker() {
   }
   root.add(legsGroup)
 
-  // --- Chassis: identico a MANIPULATOR (stesso modello) ---
+  // Chassis like AMR 
   const discHeight = 0.1875
   const disc = new THREE.Mesh(
     new THREE.CylinderGeometry(state.discRadius, state.discRadius, discHeight, 32),
@@ -191,8 +160,7 @@ export function LeggedManipulatorModelMaker() {
   )
   root.add(disc)
 
-  // --- Manipolatore 3R sul disco: stesso codice di MANIPULATOR, invariato
-  // (stesso modello — solo le gambe sotto cambiano) ---
+  // 
   const jointRadius = 0.22
 
   const base = new THREE.Group()
@@ -200,8 +168,6 @@ export function LeggedManipulatorModelMaker() {
 
   const baseJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius, 16, 16), armMat)
   base.add(baseJoint)
-
-  // makeTaperedLinkGeometry ora in geometryControlHelpers.js (condivisa)
 
   const link1Group = new THREE.Group()
   base.add(link1Group)
@@ -247,8 +213,10 @@ export function LeggedManipulatorModelMaker() {
   paddleGroup.add(paddleCenter)
   const ballRestPoint = new THREE.Object3D()
   paddleGroup.add(ballRestPoint)
+
   let gripOffset = 0
-  function effectivePaddleAngle() {
+  function effectivePaddleAngle() 
+  {
     return Math.max(state.paddleAngle - gripOffset, 0)
   }
   let shootTiltOffset = 0
@@ -281,9 +249,7 @@ export function LeggedManipulatorModelMaker() {
   levelPaddle()
   applyPaddleAngle()
 
-  // --- Scala/altezza gambe: stesso principio di applyWheelsGroupScale/
-  // syncChassisHeight in manipulator.js, derivato dalla vera geometria
-  // delle gambe (standHeight) invece di un valore fisso ---
+  // Apply the legs group scale based on the state and disc radius
   function applyLegsGroupScale() {
     legsGroup.scale.setScalar(state.legsScale * (state.discRadius / INITIAL_DISC_RADIUS))
   }
@@ -296,10 +262,6 @@ export function LeggedManipulatorModelMaker() {
   }
   applyLegsGroupScale()
   syncChassisHeight()
-
-  // replaceGeometry/makeScaleSetter/createLinkControls ora in
-  // geometryControlHelpers.js (condivise dai 3 ModelMaker) — prendono
-  // `state` esplicito come primo argomento invece di chiuderlo
 
   const controls = {
     manipulatorScale: makeScaleSetter(state, 'manipulatorScale', root),
@@ -360,18 +322,12 @@ export function LeggedManipulatorModelMaker() {
       state.paddleTilt = angle
       levelPaddle()
     },
-    // wheelsGroup è concettualmente legsGroup qui — vedi commento in cima
-    // al file sul perché il nome resta "Wheels" (contratto condiviso con
-    // RobotBase.updateLocomotionAnimation/main.js/EnemyAI.js/CombatMoves.js)
+    // wheelsGroup is legsGroup here
     setWheelsYaw(angle) {
       legsGroup.rotation.y = angle
     },
-    // Jump (LeggedManipulator.js): un solo offset applicato a
-    // anca+ginocchio di TUTTE e 4 le gambe insieme (stesso principio del
-    // gomito+link1 nel palleggio del braccio, mossi in coppia) — negativo
-    // per accovacciarsi (anticipazione prima dello scatto), positivo per
-    // estendersi durante il salto. Non tracciato in state/Copy Config: è
-    // posa, non forma
+    // Jump: one offset applied to hip+knee of all 4 legs together — negative to crouch, positive to extend.
+    // Pose only, not tracked in state/Copy Config.
     setLegBend(offset) {
       for (let i = 0; i < legs.length; i++) {
         const { hip, knee } = legs[i]
@@ -379,17 +335,8 @@ export function LeggedManipulatorModelMaker() {
         knee.rotation.x = KNEE_REST_PITCH + offset
       }
     },
-    // Bozza di camminata (LeggedManipulator.js): andatura "trot" —
-    // le 4 gambe sono agli stessi 4 angoli delle ruote di MANIPULATOR,
-    // quindi le coppie DIAGONALI sono gli indici (0,3) e (1,2) (vedi
-    // l'array di offset sopra: 0=(-x,-z), 1=(x,-z), 2=(-x,z), 3=(x,z) —
-    // la diagonale di 0 è 3, quella di 1 è 2). phase avanza nel tempo
-    // mentre ci si muove (LeggedManipulator la guida); le due coppie
-    // oscillano in opposizione (sin/-sin), come un vero trotto a 4 zampe
-    // invece di muoversi tutte insieme (che sembrerebbe un salto, non un
-    // passo). Il ginocchio segue con un piccolo sfasamento/ampiezza
-    // ridotta rispetto all'anca — non IK vero, solo abbastanza per
-    // leggere "gamba che si piega quando avanza" invece di un pendolo rigido
+    // Trot gait: legs are at the same 4 offsets as AMR's wheels, so diagonal pairs are indices (0,3) and (1,2).
+    // The two pairs swing in opposition (sin/-sin) like a real 4-leg trot. Not real IK, just enough to read as steps.
     setLegWalkCycle(phase) {
       for (let i = 0; i < legs.length; i++) {
         const { hip, knee } = legs[i]
@@ -418,8 +365,7 @@ export function LeggedManipulatorModelMaker() {
 
   return {
     root,
-    // vedi commento sopra su controls.setWheelsYaw: stessa chiave, punta
-    // alle gambe invece che a delle ruote
+    // Same key as AMR's wheelsGroup, points at the legs instead
     wheelsGroup: legsGroup,
     joints: { base, elbow, wrist },
     paddle: paddleCenter,
