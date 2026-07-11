@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-import { angleToForward, rotateRight } from './mathUtils.js'
-import { getObjectWorldPosition } from './BallPossession.js'
-import { blockBoxHalfSizeFor } from './CombatMoves.js'
+import { angleToForward, rotateRight } from '../utils/mathUtils.js'
+import { getObjectWorldPosition } from '../gameplay/BallPossession.js'
+import { blockBoxHalfSizeFor } from '../gameplay/CombatMoves.js'
 
 // Wireframe overlay dei volumi di collisione/contatto usati dal gioco, per
 // ISPEZIONARLI a occhio invece di leggerne solo i numeri (quello resta il

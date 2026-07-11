@@ -1,8 +1,8 @@
 import * as THREE from 'three'
-import { RobotState } from './robots/RobotBase.js'
+import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { dribbleAmplitudesRad, snapBallToRestPoint, getObjectWorldPosition, resetToNeutralPossession } from './BallPossession.js'
-import { angleToForward } from './mathUtils.js'
+import { angleToForward } from '../utils/mathUtils.js'
 
 // STEAL e BLOCK: entrambe animazioni di "allungo" (flette link1, estende
 // elbow) via manipulator.controls.setDribbleOffsets — stessa API già usata

@@ -1,8 +1,8 @@
 import * as THREE from 'three'
-import { RobotState } from './robots/RobotBase.js'
+import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { clampOrbitPitchToNormalRange, dribbleAmplitudesRad, getObjectWorldPosition, paddleWorldPos } from './BallPossession.js'
-import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from './constants.js'
+import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from '../utils/constants.js'
 
 // Quarto e ultimo pezzo del refactor modulare: tiro, hoop assist, punteggio
 // e preview di traiettoria — tutti insieme perché condividono isHoopCrossing/

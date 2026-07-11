@@ -8,9 +8,9 @@
 // passando per questa classe — nessuna migrazione forzata del chiamante.
 
 import * as THREE from 'three'
-import { lerpAngle } from '../mathUtils.js'
-import { BALL_GRAVITY } from '../constants.js'
-import { Team } from '../Team.js'
+import { lerpAngle } from '../utils/mathUtils.js'
+import { BALL_GRAVITY } from '../utils/constants.js'
+import { Team } from '../state/Team.js'
 
 // Colore ACCENT di default per squadra (paletta/end effector — il colore
 // più "leggibile" a distanza) — solo questo canale differisce per team di

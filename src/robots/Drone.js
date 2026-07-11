@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { DroneModelMaker } from './ModelMakers/DroneModelMaker.js'
 import { RobotBase } from './RobotBase.js'
-import { lerpAngle } from '../mathUtils.js'
+import { lerpAngle } from '../utils/mathUtils.js'
 
 // stat DRONE: il più veloce del roster (vola, non deve girare ruote/gambe
 // per cambiare direzione) ma il peggiore in STEAL/BLOCK (corpo leggero,

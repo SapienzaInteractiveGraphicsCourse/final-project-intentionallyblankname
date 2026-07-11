@@ -6,28 +6,29 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
+import { Sky } from 'three/addons/objects/Sky.js'
 import { AMRManipulator, MANIPULATOR_STATS } from './robots/AMRManipulator.js'
 import { LeggedManipulator, LEGGED_MANIPULATOR_STATS } from './robots/LeggedManipulator.js'
 import { Drone, DRONE_STATS, droneTuning } from './robots/Drone.js'
-import { ROBOT_KEYS, getSelectedRobotKey, getSelectedEnemyRobotKey, setSelectedRobotKey, setSelectedEnemyRobotKey } from './RobotSelection.js'
-import { getSavedAllyColors, saveAllyColors } from './RobotColors.js'
-import { Team } from './Team.js'
+import { ROBOT_KEYS, getSelectedRobotKey, getSelectedEnemyRobotKey, setSelectedRobotKey, setSelectedEnemyRobotKey } from './state/RobotSelection.js'
+import { getSavedAllyColors, saveAllyColors } from './state/RobotColors.js'
+import { Team } from './state/Team.js'
 import { RobotState } from './robots/RobotBase.js'
 import { createProceduralPBRMaps, drawBrushedMetal } from './robots/ModelMakers/AMRManipulatorModelMaker.js'
-import { Basketball, BallState } from './Basketball.js'
-import { GameMode } from './GameMode.js'
-import { TimeOfDay } from './TimeOfDay.js'
-import { SoundEffects } from './SoundEffects.js'
-import { CollisionWorld, RIM_RING_RADIUS, RIM_TUBE_RADIUS } from './CollisionWorld.js'
-import { initMainMenu } from './MainMenu.js'
-import { angleToForward, rotateRight } from './mathUtils.js'
-import { initBallPossession, stepDribble, getObjectWorldPosition, createDribbleState, snapBallToRestPoint } from './BallPossession.js'
-import { initShootingSystem } from './ShootingSystem.js'
-import { initEnemyAI, AI_MIN_PLAYER_DISTANCE } from './EnemyAI.js'
-import { initCombatMoves, stealCooldownFor, blockCooldownFor, isCombatMoveActive, STEAL_FORWARD_MARGIN, STEAL_BACKWARD_MARGIN } from './CombatMoves.js'
-import { initDebugPanel } from './debugPanel.js'
-import { initCollisionDebugView } from './CollisionDebugView.js'
-import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX, BALL_GRAVITY } from './constants.js'
+import { Basketball, BallState } from './gameplay/Basketball.js'
+import { GameMode } from './state/GameMode.js'
+import { TimeOfDay } from './state/TimeOfDay.js'
+import { SoundEffects } from './audio/SoundEffects.js'
+import { CollisionWorld, RIM_RING_RADIUS, RIM_TUBE_RADIUS } from './gameplay/CollisionWorld.js'
+import { initMainMenu } from './ui/MainMenu.js'
+import { angleToForward, rotateRight } from './utils/mathUtils.js'
+import { initBallPossession, stepDribble, getObjectWorldPosition, createDribbleState, snapBallToRestPoint } from './gameplay/BallPossession.js'
+import { initShootingSystem } from './gameplay/ShootingSystem.js'
+import { initEnemyAI, AI_MIN_PLAYER_DISTANCE } from './gameplay/EnemyAI.js'
+import { initCombatMoves, stealCooldownFor, blockCooldownFor, isCombatMoveActive, STEAL_FORWARD_MARGIN, STEAL_BACKWARD_MARGIN } from './gameplay/CombatMoves.js'
+import { initDebugPanel } from './debug/debugPanel.js'
+import { initCollisionDebugView } from './debug/CollisionDebugView.js'
+import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX, BALL_GRAVITY } from './utils/constants.js'
 
 // --- Renderer ---
 // antialias:true qui non ha effetto: il rendering passa da EffectComposer
@@ -47,7 +48,6 @@ document.body.appendChild(renderer.domElement)
 
 // --- Scene & Camera ---
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0xf0b8b8)
 
 // near=0.1 su far=5000 (rapporto 1:50000) satura la precisione del depth
 // buffer vicino alla camera e rende inutilizzabile la depth texture di
@@ -119,23 +119,68 @@ sun.shadow.bias = -0.0005
 sun.shadow.normalBias = 2
 scene.add(sun)
 
-// preset di illuminazione scelti nel main menu (fase del giorno) — colore
-// e intensità di hemi/sun, più la posizione del sole (basso all'alba/
-// tramonto, alto a mezzogiorno). Nessun ciclo/interpolazione dinamica,
-// solo lo scatto al preset scelto una volta all'avvio
-// bgColor: scene.background — un colore solido, non una vera skybox
-// texturizzata (richiederebbe una HDR scaricata, in contrasto con
-// l'approccio "tutto procedurale/nessun asset esterno" del progetto).
+// Skybox procedurale (modello Preetham/Rayleigh scattering, three/addons/
+// objects/Sky.js — parte dell'ecosistema three.js ufficiale, nessun asset HDR
+// scaricato, coerente con l'approccio "tutto procedurale" del resto del
+// progetto), al posto del colore piatto (`scene.background = new THREE.Color`)
+// usato finora. Box enorme (BackSide, three.js disegna solo le facce interne)
+// scalato appena sotto camera.far=5000 così resta sempre dietro a tutto senza
+// mai finire fuori dal frustum di clipping
+const sky = new Sky()
+sky.scale.setScalar(4800)
+scene.add(sky)
+
+// converte elevazione/azimuth (gradi) in un vettore direzione unitario per
+// l'uniform sunPosition dello shader Sky — stessa formula standard usata
+// negli esempi three.js (phi da zenit, non da orizzonte)
+function sunDirectionFromElevAzim(elevationDeg, azimuthDeg, target = new THREE.Vector3()) {
+  const phi = THREE.MathUtils.degToRad(90 - elevationDeg)
+  const theta = THREE.MathUtils.degToRad(azimuthDeg)
+  return target.setFromSphericalCoords(1, phi, theta)
+}
+
+// preset di illuminazione scelti nel main menu (fase del giorno) — colore e
+// intensità di hemi/sun, posizione del sole (basso all'alba/tramonto, alto a
+// mezzogiorno) e look atmosferico dello Sky (torbidità/rayleigh/mie).
+// skyElevation/skyAzimuth sono SEPARATI da sunPos: sunPos è la luce vera
+// (serve solo una direzione d'ombra coerente, l'intensità bassa fa il resto
+// del lavoro per NIGHT — motivo per cui resta "alta" come DAY), ma il modello
+// Preetham dello Sky renderizza un cielo diurno azzurro ogni volta che il
+// sole è sopra l'orizzonte, qualunque sia torbidità/rayleigh — per NIGHT il
+// sole del cielo deve scendere sotto l'orizzonte (elevation negativa),
+// altrimenti lo skybox sembrerebbe pieno giorno anche di notte.
 // NIGHT alzata rispetto al primo tentativo (hemi 0.35→0.6, sun 0.2→0.5):
 // troppo scuro, quasi nero — resta comunque la più buia delle 4, ma con
 // una luce blu lunare chiaramente presente, non pressoché assente
 const TIME_OF_DAY_PRESETS = {
-  [TimeOfDay.SUNRISE]: { hemiSky: 0xffb08a, hemiGround: 0x9a5a40, hemiIntensity: 0.9, sunColor: 0xffae5c, sunIntensity: 1.0, sunPos: [1500, 400, -800], bgColor: 0xffb379 },
-  [TimeOfDay.DAY]:     { hemiSky: 0xffd0c8, hemiGround: 0xc09080, hemiIntensity: 1.2, sunColor: 0xfff5ee, sunIntensity: 1.2, sunPos: [1500, 1200, -800], bgColor: 0x8fc8f0 },
-  [TimeOfDay.SUNSET]:  { hemiSky: 0xff8a5c, hemiGround: 0x7a3a2a, hemiIntensity: 0.85, sunColor: 0xff7040, sunIntensity: 0.9, sunPos: [-1500, 400, 800], bgColor: 0xd9502a },
-  [TimeOfDay.NIGHT]:   { hemiSky: 0x3a4a7c, hemiGround: 0x10101c, hemiIntensity: 0.6, sunColor: 0x6a8fd0, sunIntensity: 0.5, sunPos: [1500, 1200, -800], bgColor: 0x0a1030 },
+  [TimeOfDay.SUNRISE]: { hemiSky: 0xffb08a, hemiGround: 0x9a5a40, hemiIntensity: 0.9, sunColor: 0xffae5c, sunIntensity: 1.0, sunPos: [1500, 400, -800], skyElevation: 6, skyAzimuth: 220, skyTurbidity: 8, skyRayleigh: 2.5, skyMie: 0.01, skyMieG: 0.9 },
+  [TimeOfDay.DAY]:     { hemiSky: 0xffd0c8, hemiGround: 0xc09080, hemiIntensity: 1.2, sunColor: 0xfff5ee, sunIntensity: 1.2, sunPos: [1500, 1200, -800], skyElevation: 60, skyAzimuth: 220, skyTurbidity: 3, skyRayleigh: 1.2, skyMie: 0.003, skyMieG: 0.8 },
+  [TimeOfDay.SUNSET]:  { hemiSky: 0xff8a5c, hemiGround: 0x7a3a2a, hemiIntensity: 0.85, sunColor: 0xff7040, sunIntensity: 0.9, sunPos: [-1500, 400, 800], skyElevation: 4, skyAzimuth: 40, skyTurbidity: 8, skyRayleigh: 3, skyMie: 0.012, skyMieG: 0.92 },
+  [TimeOfDay.NIGHT]:   { hemiSky: 0x3a4a7c, hemiGround: 0x10101c, hemiIntensity: 0.6, sunColor: 0x6a8fd0, sunIntensity: 0.5, sunPos: [1500, 1200, -800], skyElevation: -8, skyAzimuth: 220, skyTurbidity: 4, skyRayleigh: 0.5, skyMie: 0.005, skyMieG: 0.8 },
 }
+
+// stato della transizione animata (stile isometric_racer: rampa/crossfade
+// invece di uno scatto secco, vedi startTimeOfDayTransition/
+// updateTimeOfDayTransition più sotto) — scratch riusati, mai riallocati
+// per frame durante il fade
+const TIME_OF_DAY_TRANSITION_DURATION = 2.5
+const timeOfDayTransition = {
+  active: false, elapsed: 0, toTime: TimeOfDay.SUNRISE,
+  fromHemiSky: new THREE.Color(), fromHemiGround: new THREE.Color(), fromHemiIntensity: 0,
+  fromSunColor: new THREE.Color(), fromSunIntensity: 0, fromSunPos: new THREE.Vector3(),
+  fromSkySunDir: new THREE.Vector3(), fromSkyTurbidity: 0, fromSkyRayleigh: 0, fromSkyMie: 0, fromSkyMieG: 0,
+  fromHoopSpotIntensity: 0,
+}
+const skySunDirScratch = new THREE.Vector3()
+const presetColorScratch = new THREE.Color()
+const presetSunPosScratch = new THREE.Vector3()
+
+// applica un preset SENZA transizione — solo per lo stato iniziale a
+// caricamento pagina (vedi startTimeOfDayTransition per il cambio animato
+// dal Main Menu). Cancella anche una transizione in corso: uno scatto
+// istantaneo deve sempre vincere su un fade a metà
 function applyTimeOfDayPreset(time) {
+  timeOfDayTransition.active = false
   const preset = TIME_OF_DAY_PRESETS[time]
   hemi.color.set(preset.hemiSky)
   hemi.groundColor.set(preset.hemiGround)
@@ -143,7 +188,11 @@ function applyTimeOfDayPreset(time) {
   sun.color.set(preset.sunColor)
   sun.intensity = preset.sunIntensity
   sun.position.set(...preset.sunPos)
-  scene.background = new THREE.Color(preset.bgColor)
+  sunDirectionFromElevAzim(preset.skyElevation, preset.skyAzimuth, sky.material.uniforms.sunPosition.value)
+  sky.material.uniforms.turbidity.value = preset.skyTurbidity
+  sky.material.uniforms.rayleigh.value = preset.skyRayleigh
+  sky.material.uniforms.mieCoefficient.value = preset.skyMie
+  sky.material.uniforms.mieDirectionalG.value = preset.skyMieG
   // faretti canestro: accesi solo a SUNSET/NIGHT, di giorno la luce
   // naturale basta (asta e corpo del faretto restano visibili comunque)
   // MAI .visible = false: una luce con ombre che torna visibile per la
@@ -154,6 +203,67 @@ function applyTimeOfDayPreset(time) {
   // frame), a 0 semplicemente non illumina nulla, zero costo di setup
   const spotsOn = time === TimeOfDay.SUNSET || time === TimeOfDay.NIGHT
   hoopSpotlights.forEach(spot => { spot.intensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0 })
+}
+
+// avvia il cambio ANIMATO (Main Menu → schermata TIME OF DAY): l'istantanea
+// "from" è presa dai valori LIVE correnti, non dal preset nominale di
+// partenza — se una transizione precedente viene interrotta a metà da un
+// secondo click, si riparte da dove si è VERAMENTE arrivati (stesso
+// principio già usato altrove nel progetto per non assumere uno stato mai
+// verificato, vedi CLAUDE.md → stealState.contactMade)
+function startTimeOfDayTransition(time) {
+  const t = timeOfDayTransition
+  t.fromHemiSky.copy(hemi.color)
+  t.fromHemiGround.copy(hemi.groundColor)
+  t.fromHemiIntensity = hemi.intensity
+  t.fromSunColor.copy(sun.color)
+  t.fromSunIntensity = sun.intensity
+  t.fromSunPos.copy(sun.position)
+  t.fromSkySunDir.copy(sky.material.uniforms.sunPosition.value)
+  t.fromSkyTurbidity = sky.material.uniforms.turbidity.value
+  t.fromSkyRayleigh = sky.material.uniforms.rayleigh.value
+  t.fromSkyMie = sky.material.uniforms.mieCoefficient.value
+  t.fromSkyMieG = sky.material.uniforms.mieDirectionalG.value
+  t.fromHoopSpotIntensity = hoopSpotlights[0]?.intensity ?? 0
+  t.toTime = time
+  t.elapsed = 0
+  t.active = true
+}
+
+// chiamata ogni frame da animate() (anche a menuState.mode==='menu': è
+// proprio lì che il cambio viene scelto e deve restare visibile mentre
+// sfuma) — no-op immediato se non c'è nessuna transizione in corso
+function updateTimeOfDayTransition(delta) {
+  const t = timeOfDayTransition
+  if (!t.active) return
+  t.elapsed += delta
+  const linearT = Math.min(t.elapsed / TIME_OF_DAY_TRANSITION_DURATION, 1)
+  const e = linearT * linearT * (3 - 2 * linearT) // smoothstep
+
+  const preset = TIME_OF_DAY_PRESETS[t.toTime]
+  hemi.color.lerpColors(t.fromHemiSky, presetColorScratch.set(preset.hemiSky), e)
+  hemi.groundColor.lerpColors(t.fromHemiGround, presetColorScratch.set(preset.hemiGround), e)
+  hemi.intensity = THREE.MathUtils.lerp(t.fromHemiIntensity, preset.hemiIntensity, e)
+  sun.color.lerpColors(t.fromSunColor, presetColorScratch.set(preset.sunColor), e)
+  sun.intensity = THREE.MathUtils.lerp(t.fromSunIntensity, preset.sunIntensity, e)
+  sun.position.lerpVectors(t.fromSunPos, presetSunPosScratch.set(...preset.sunPos), e)
+
+  sunDirectionFromElevAzim(preset.skyElevation, preset.skyAzimuth, skySunDirScratch)
+  sky.material.uniforms.sunPosition.value.lerpVectors(t.fromSkySunDir, skySunDirScratch, e).normalize()
+  sky.material.uniforms.turbidity.value = THREE.MathUtils.lerp(t.fromSkyTurbidity, preset.skyTurbidity, e)
+  sky.material.uniforms.rayleigh.value = THREE.MathUtils.lerp(t.fromSkyRayleigh, preset.skyRayleigh, e)
+  sky.material.uniforms.mieCoefficient.value = THREE.MathUtils.lerp(t.fromSkyMie, preset.skyMie, e)
+  sky.material.uniforms.mieDirectionalG.value = THREE.MathUtils.lerp(t.fromSkyMieG, preset.skyMieG, e)
+
+  // stesso principio del faretto in applyTimeOfDayPreset: l'intensità stessa
+  // viene interpolata (mai un toggle .visible secco), qui il fade è ancora
+  // più naturale perché la luce vera e propria si accende/spegne gradualmente
+  const spotsOn = t.toTime === TimeOfDay.SUNSET || t.toTime === TimeOfDay.NIGHT
+  const targetHoopIntensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0
+  const hoopIntensity = THREE.MathUtils.lerp(t.fromHoopSpotIntensity, targetHoopIntensity, e)
+  hoopSpotlights.forEach(spot => { spot.intensity = hoopIntensity })
+
+  if (linearT >= 1) t.active = false
 }
 
 // Lampioni: 4 punti luce alle posizioni dei globi del modello GLTF
@@ -291,7 +401,7 @@ HOOP_SPOTLIGHT_POSITIONS.forEach(({ x, z }) => {
   fixture.castShadow = false // sta esattamente sulla luce stessa, si autoproietterebbe addosso
   scene.add(fixture)
 })
-// SUNRISE di default all'avvio (sostituisce lo 0xf0b8b8 segnaposto sopra,
+// SUNRISE di default all'avvio (imposta luci+Sky sul preset iniziale,
 // stesso valore di default di menuState.timeOfDay più sotto — il campo
 // da GAMEMODE in poi, il court vuoto e "all'alba" prima ancora di scegliere
 // qualunque cosa) — la variabile timeOfDay vera e propria è dichiarata più
@@ -1885,7 +1995,7 @@ const { openPauseMenu, resetGameplayState, backToMainMenu } = initMainMenu({
   enemyScoreboardEl: document.getElementById('enemy-score-col'),
   controlsHintEl: document.getElementById('controls-hint'),
   menuState,
-  applyTimeOfDayPreset, resetScore: resetShootingScore, resetEnemyScore: resetEnemyShootingScore,
+  startTimeOfDayTransition, resetScore: resetShootingScore, resetEnemyScore: resetEnemyShootingScore,
   renderer, sun, ssaoPass,
   movementState, dashState, dashMaxCharges: DASH_MAX_CHARGES,
   shotVelocity, ORBIT_PITCH_REST,
@@ -2413,6 +2523,11 @@ function clampRobotToCourt(robot) {
 function animate() {
   requestAnimationFrame(animate)
   const delta = Math.min(clock.getDelta(), MAX_DELTA)
+
+  // gira SEMPRE, indipendentemente dalla modalità: il cambio di fase del
+  // giorno si sceglie dal Main Menu (menuState.mode==='menu') e deve restare
+  // visibile mentre sfuma, non solo durante Play/Spectate
+  updateTimeOfDayTransition(delta)
 
   // mentre il main menu è aperto: solo l'orbita lenta della camera, niente
   // altro (palleggio/fisica/input di gioco fermi, il campo è "vuoto" per

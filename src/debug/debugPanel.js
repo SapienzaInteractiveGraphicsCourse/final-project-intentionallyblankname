@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { createSliderControl, createToggleSection, addComponentSection } from './debugPanelHelpers.js'
-import { paddleWorldPos, isRobotTouchingBall } from './BallPossession.js'
-import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from './constants.js'
+import { paddleWorldPos, isRobotTouchingBall } from '../gameplay/BallPossession.js'
+import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from '../utils/constants.js'
 
 // Quinto pezzo del refactor modulare: il pannello debug (tasto P) vero e
 // proprio — le liste di slider/readout, non gli helper DOM puri (già in

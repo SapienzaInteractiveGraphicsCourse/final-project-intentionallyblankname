@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { RobotState } from './robots/RobotBase.js'
+import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { isCombatMoveActive } from './CombatMoves.js'
 

@@ -1,7 +1,7 @@
-import { GameMode } from './GameMode.js'
-import { TimeOfDay } from './TimeOfDay.js'
-import { RobotState } from './robots/RobotBase.js'
-import { BallState } from './Basketball.js'
+import { GameMode } from '../state/GameMode.js'
+import { TimeOfDay } from '../state/TimeOfDay.js'
+import { RobotState } from '../robots/RobotBase.js'
+import { BallState } from '../gameplay/Basketball.js'
 
 // Esperimento di split "alla isometric_racer" (vedi README → "Confronto
 // con Altri Progetti"/ricerca su cross-module state sharing): invece di
@@ -16,9 +16,12 @@ import { BallState } from './Basketball.js'
 // Cosa NON è stato spostato qui (deliberatamente): renderRobotCardPreview/
 // stat bar restano in main.js perché dipendono da stepDribble e dagli
 // helper angleToForward/rotateRight — importarli qui creerebbe la stessa
-// dipendenza circolare che questo split vuole evitare. applyTimeOfDayPreset
-// resta una CALLBACK nel context (usata anche fuori dal menu, al primo
-// avvio) — questo modulo non deve sapere come funziona dentro.
+// dipendenza circolare che questo split vuole evitare. startTimeOfDayTransition
+// resta una CALLBACK nel context (usata dal click sulla card — sempre un fade
+// animato, mai uno scatto secco) — questo modulo non deve sapere come
+// funziona dentro (luci, Sky, transizione: tutto vive in main.js).
+// applyTimeOfDayPreset (lo scatto istantaneo, usato solo al primissimo avvio
+// pagina) resta invece interna a main.js, non passa da qui.
 //
 // ctx.getBasketball() è una funzione, non un valore semplice: main.js
 // assegna basketball in modo asincrono al caricamento del GLTF, quindi al
@@ -32,7 +35,7 @@ export function initMainMenu(ctx) {
     menuOverlayEl, hint, dashPanel, combatPanel, crosshair, modeIndicator,
     scoreboardEl, enemyScoreboardEl, controlsHintEl,
     menuState, controls,
-    applyTimeOfDayPreset, resetScore, resetEnemyScore,
+    startTimeOfDayTransition, resetScore, resetEnemyScore,
     renderer, scene, camera, sun, ssaoPass, sfx,
     getManipulator, movementState, cameraState, dashState, dashMaxCharges, shootingState, handlingState, pickupState,
     stealState, blockState,
@@ -330,7 +333,7 @@ export function initMainMenu(ctx) {
       // sotto le card, nella STESSA schermata, non se ne apre un'altra
       const timeMap = { sunrise: TimeOfDay.SUNRISE, day: TimeOfDay.DAY, sunset: TimeOfDay.SUNSET, night: TimeOfDay.NIGHT }
       menuState.timeOfDay = timeMap[el.dataset.timeofday]
-      applyTimeOfDayPreset(menuState.timeOfDay)
+      startTimeOfDayTransition(menuState.timeOfDay)
       timeOfDayCards.forEach(card => card.classList.toggle('selected', card === el))
       menuStartBtn.classList.remove('hidden')
     })

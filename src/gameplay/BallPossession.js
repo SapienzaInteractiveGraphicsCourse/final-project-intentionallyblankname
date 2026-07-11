@@ -1,8 +1,8 @@
 import * as THREE from 'three'
-import { RobotState } from './robots/RobotBase.js'
+import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
-import { angleToForward, rotateRight } from './mathUtils.js'
-import { BALL_BOUNCE_SPEED, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from './constants.js'
+import { angleToForward, rotateRight } from '../utils/mathUtils.js'
+import { BALL_BOUNCE_SPEED, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from '../utils/constants.js'
 
 // Terzo pezzo del refactor modulare (dopo mathUtils/debugPanelHelpers,
 // prima di MainMenu): come il robot possiede/palleggia/afferra la palla —
