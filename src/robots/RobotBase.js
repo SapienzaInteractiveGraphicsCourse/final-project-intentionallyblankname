@@ -10,7 +10,7 @@
 import * as THREE from 'three'
 import { lerpAngle } from '../utils/mathUtils.js'
 import { BALL_GRAVITY } from '../utils/constants.js'
-import { Team } from '../state/Team.js'
+import { Team } from '../SharedEnums.js'
 
 // Colore ACCENT di default per squadra (paletta/end effector — il colore
 // più "leggibile" a distanza) — solo questo canale differisce per team di
@@ -46,7 +46,7 @@ export class RobotBase {
     Object.assign(this, factory())
     this.stats = stats
     this.type = type
-    this.team = team // Team.A/Team.B (src/Team.js) — chi possiede la palla si legge da qui via Basketball.owner.team
+    this.team = team // Team.A/Team.B (src/SharedEnums.js) — chi possiede la palla si legge da qui via Basketball.owner.team
     // default per-squadra applicato SUBITO alla costruzione — Team.A (nessuna
     // chiave in TEAM_ACCENT_COLOR) resta l'arancione di fabbrica del
     // ModelMaker, invariato

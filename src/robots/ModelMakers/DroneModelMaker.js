@@ -319,8 +319,8 @@ export function DroneModelMaker() {
 
   const controls = {
     manipulatorScale: makeScaleSetter(state, 'manipulatorScale', root),
-    ...createLinkControls(state, { statePrefix: 'link1', mesh: link1, downstreamJoint: elbow, buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'] }),
-    ...createLinkControls(state, { statePrefix: 'link2', mesh: link2, downstreamJoint: wrist, buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'] }),
+    link1: createLinkControls(state, { statePrefix: 'link1', mesh: link1, downstreamJoint: elbow, buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'] }),
+    link2: createLinkControls(state, { statePrefix: 'link2', mesh: link2, downstreamJoint: wrist, buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'] }),
     baseJointScale: makeScaleSetter(state, 'baseJointScale', baseJoint),
     elbowJointScale: makeScaleSetter(state, 'elbowJointScale', elbowJoint),
     endEffectorScale: makeScaleSetter(state, 'endEffectorScale', endEffector),
@@ -353,8 +353,8 @@ export function DroneModelMaker() {
     ...createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }),
   }
 
-  controls.link1Scale(state.link1Scale)
-  controls.link2Scale(state.link2Scale)
+  controls.link1.scale(state.link1Scale)
+  controls.link2.scale(state.link2Scale)
   controls.baseJointScale(state.baseJointScale)
   controls.elbowJointScale(state.elbowJointScale)
   controls.endEffectorScale(state.endEffectorScale)

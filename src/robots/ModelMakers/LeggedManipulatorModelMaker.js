@@ -117,12 +117,14 @@ export function LeggedManipulatorModelMaker() {
   // (Jump: le gambe si accovacciano prima dello scatto e si estendono
   // durante il salto), non solo alla costruzione iniziale
   const legs = []
-  ;[
+  const legOffsets = [
     [-LEG_OFFSET_X, -LEG_OFFSET_Z],
     [LEG_OFFSET_X, -LEG_OFFSET_Z],
     [-LEG_OFFSET_X, LEG_OFFSET_Z],
     [LEG_OFFSET_X, LEG_OFFSET_Z],
-  ].forEach(([x, z]) => {
+  ]
+  for (let legIndex = 0; legIndex < legOffsets.length; legIndex++) {
+    const [x, z] = legOffsets[legIndex]
     // orientamento fisso verso l'esterno (stesso verso di angleToForward:
     // yaw=0 → +Z), così anca/ginocchio (che ruotano solo su X, come
     // gomito/polso del braccio 3R) piegano la gamba radialmente lontano dal
@@ -178,7 +180,7 @@ export function LeggedManipulatorModelMaker() {
     ankle.add(foot)
     feet.push(foot)
     legs.push({ hip, knee })
-  })
+  }
   root.add(legsGroup)
 
   // --- Chassis: identico a MANIPULATOR (stesso modello) ---
@@ -313,11 +315,11 @@ export function LeggedManipulatorModelMaker() {
       applyLegsGroupScale()
       syncChassisHeight()
     },
-    ...createLinkControls(state, {
+    link1: createLinkControls(state, {
       statePrefix: 'link1', mesh: link1, downstreamJoint: elbow,
       buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'],
     }),
-    ...createLinkControls(state, {
+    link2: createLinkControls(state, {
       statePrefix: 'link2', mesh: link2, downstreamJoint: wrist,
       buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'],
     }),
@@ -371,10 +373,11 @@ export function LeggedManipulatorModelMaker() {
     // estendersi durante il salto. Non tracciato in state/Copy Config: è
     // posa, non forma
     setLegBend(offset) {
-      legs.forEach(({ hip, knee }) => {
+      for (let i = 0; i < legs.length; i++) {
+        const { hip, knee } = legs[i]
         hip.rotation.x = HIP_REST_PITCH + offset
         knee.rotation.x = KNEE_REST_PITCH + offset
-      })
+      }
     },
     // Bozza di camminata (LeggedManipulator.js): andatura "trot" —
     // le 4 gambe sono agli stessi 4 angoli delle ruote di MANIPULATOR,
@@ -388,19 +391,20 @@ export function LeggedManipulatorModelMaker() {
     // ridotta rispetto all'anca — non IK vero, solo abbastanza per
     // leggere "gamba che si piega quando avanza" invece di un pendolo rigido
     setLegWalkCycle(phase) {
-      legs.forEach(({ hip, knee }, i) => {
+      for (let i = 0; i < legs.length; i++) {
+        const { hip, knee } = legs[i]
         const pairSign = (i === 0 || i === 3) ? 1 : -1
         const swing = Math.sin(phase) * pairSign * WALK_SWING_AMPLITUDE
         hip.rotation.x = HIP_REST_PITCH + swing
         knee.rotation.x = KNEE_REST_PITCH - swing * 0.6
-      })
+      }
     },
     ...createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }),
   }
 
   controls.discScale(state.discScale)
-  controls.link1Scale(state.link1Scale)
-  controls.link2Scale(state.link2Scale)
+  controls.link1.scale(state.link1Scale)
+  controls.link2.scale(state.link2Scale)
   controls.baseJointScale(state.baseJointScale)
   controls.elbowJointScale(state.elbowJointScale)
   controls.endEffectorScale(state.endEffectorScale)

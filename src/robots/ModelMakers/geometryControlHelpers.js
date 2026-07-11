@@ -1,15 +1,12 @@
 import * as THREE from 'three'
 
-// Helper generici di geometria/controlli "Scale" condivisi dai 3 ModelMaker
-// (AMRManipulatorModelMaker/LeggedManipulatorModelMaker/DroneModelMaker) —
-// robot-agnostici (non toccano la parte "delicata": il blocco braccio 3R+
-// paletta resta duplicato deliberatamente in ognuno, vedi CLAUDE.md → cosa
-// resta E perché). Prima erano ridefiniti identici in tutti e tre; qui
-// prendono `state` come parametro esplicito invece di chiuderlo, perché
-// ogni ModelMaker ha il proprio oggetto state locale (non condivisibile).
 
-// dispose + riassegna: le geometrie non sono ridimensionabili "in place"
-export function replaceGeometry(mesh, newGeo) {
+
+// helper functions for ModelMakers to create geometry and control it via state
+
+// replaceGeometry: dispose of the old geometry and assign a new one to a mesh
+export function replaceGeometry(mesh, newGeo) 
+{
   mesh.geometry.dispose()
   mesh.geometry = newGeo
 }
@@ -17,69 +14,80 @@ export function replaceGeometry(mesh, newGeo) {
 // setter "scale" generico: stessa forma per disc/link1/link2/giunti,
 // cambia solo la state-key e la mesh target
 export function makeScaleSetter(state, key, mesh) {
-  return s => {
+  return s => 
+    {
     state[key] = s
     mesh.scale.setScalar(s)
   }
 }
-
-export function makeLinkGeometry(length, thickness) {
+export function makeLinkGeometry(length, thickness) 
+{
   const geo = new THREE.BoxGeometry(thickness, length, thickness)
-  geo.translate(0, length / 2, 0) // pivot all'estremità inferiore
+  geo.translate(0, length / 2, 0) // pivot lower end (base) of the link, not its center
   return geo
 }
 
-// link rastremato (base ≠ punta): CylinderGeometry con radialSegments=4 è
-// un prisma a base quadrata invece che rotondo; top/bottom radius diversi =
-// tronco di piramide, cioè un parallelepipedo trapezoidale. radius =
-// thickness/√2 per far coincidere la larghezza faccia-a-faccia (non
-// spigolo-a-spigolo) con lo spessore, coerente col BoxGeometry
-export function makeTaperedLinkGeometry(length, baseThickness, tipThickness) {
+// tapered link geometry: square cross-section, base and tip thicknesses differ
+export function makeTaperedLinkGeometry(length, baseThickness, tipThickness) 
+{
   const rBase = baseThickness / Math.SQRT2
   const rTip = tipThickness / Math.SQRT2
   const geo = new THREE.CylinderGeometry(rTip, rBase, length, 4)
-  geo.rotateY(Math.PI / 4) // allinea le facce piatte agli assi X/Z
-  geo.translate(0, length / 2, 0) // pivot all'estremità inferiore (base)
+  geo.rotateY(Math.PI / 4)        // square cross-section, not diamond
+  geo.translate(0, length / 2, 0) // pivot lower end (base) of the link, not its center
   return geo
 }
 
-// genera Scale/Length/Thickness(+TipThickness) per un link, parametrico su
-// state/mesh/funzione di geometria/giunto a valle da riposizionare — link1
-// e link2 differiscono solo per questi argomenti
-export function createLinkControls(state, { statePrefix, mesh, downstreamJoint, buildGeometry, thicknessNames }) {
-  const lengthKey = `${statePrefix}Length`
-  function rebuild() {
-    const thicknessArgs = thicknessNames.map(name => state[`${statePrefix}${name}`])
+// createLinkControls: for a link mesh, create a set of setters that update the state and rebuild the geometry
+// Generates functions based on the statePrefix and thicknessNames provided
+export function createLinkControls(state, { statePrefix, mesh, downstreamJoint, buildGeometry, thicknessNames })
+{
+  const lengthKey = `${statePrefix}Length` // "link1Length" or "discLength" state itself stays flat (Copy Config)
+
+  // rebuild: create a new geometry for the link mesh based on the current state values
+  function rebuild() 
+  {
+    const thicknessArgs = []
+    // here we obtain thickness values from state based on the provided thicknessNames
+    for (let i = 0; i < thicknessNames.length; i++) thicknessArgs.push(state[`${statePrefix}${thicknessNames[i]}`])
+    // replace the mesh's geometry with a new one built from the current length and thickness values
     replaceGeometry(mesh, buildGeometry(state[lengthKey], ...thicknessArgs))
   }
-  const linkControls = {
-    [`${statePrefix}Scale`]: makeScaleSetter(state, `${statePrefix}Scale`, mesh),
-    [lengthKey](l) {
+
+  // linkControls: a set of setters for the link's length and thicknesses, which update the state and rebuild the geometry
+  const linkControls = 
+  {
+    scale: makeScaleSetter(state, `${statePrefix}Scale`, mesh),
+    length(l) {
       state[lengthKey] = l
       rebuild()
       downstreamJoint.position.y = l
     },
   }
-  thicknessNames.forEach(name => {
-    linkControls[`${statePrefix}${name}`] = t => {
+
+  // thickness setters: for each thickness name, create a setter that updates the state and rebuilds the
+  // geometry,  propName lowercases the first letter ('Thickness' -> 'thickness', 'TipThickness' -> 'tipThickness')
+
+  // propName is computed at runtime (e.g. 'thickness'/'tipThickness') — the
+  // literal word never appears in this file, it comes from the caller's
+  // thicknessNames array
+  for (let i = 0; i < thicknessNames.length; i++) {
+    const name = thicknessNames[i]
+    const propName = name.charAt(0).toLowerCase() + name.slice(1) 
+    linkControls[propName] = t => 
+      {
       state[`${statePrefix}${name}`] = t
       rebuild()
     }
-  })
+  }
   return linkControls
 }
 
-// setColors/getColors condivisi dai 3 ModelMaker — 3 "canali" colore
-// uniformi per ogni classe (body/arm/accent), a prescindere da quante MESH
-// diverse condividano ciascun materiale (es. bodyMat è condiviso da
-// disco+chassis in AMR, solo dallo scafo nel Drone). Materiali creati UNA
-// volta per CHIAMATA di factory (mai condivisi tra istanze/classi), quindi
-// mutare `.color` qui tocca solo il robot proprietario — usato sia per il
-// default per-squadra (RobotBase, arancione/viola) sia per la
-// personalizzazione dal vivo (pulsante "Personalizza" nel Main Menu)
+// createColorControls: for a set of materials, create a set of setters that update the colors of the materials
 export function createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }) {
   return {
-    setColors({ body, arm, accent } = {}) {
+    setColors({ body, arm, accent } = {}) 
+    {
       if (body !== undefined) bodyMat.color.set(body)
       if (arm !== undefined) armMat.color.set(arm)
       if (accent !== undefined) accentMat.color.set(accent)

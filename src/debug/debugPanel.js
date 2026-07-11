@@ -115,15 +115,15 @@ export function initDebugPanel(ctx) {
       ])
     }
     addComponentSection(config, 'Link 1', [
-      { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link1Scale, onChange: robot.controls.link1Scale },
-      { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link1Length, onChange: robot.controls.link1Length },
-      { name: 'Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link1Thickness, onChange: robot.controls.link1Thickness },
+      { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link1Scale, onChange: robot.controls.link1.scale },
+      { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link1Length, onChange: robot.controls.link1.length },
+      { name: 'Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link1Thickness, onChange: robot.controls.link1.thickness },
     ])
     addComponentSection(config, 'Link 2', [
-      { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link2Scale, onChange: robot.controls.link2Scale },
-      { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link2Length, onChange: robot.controls.link2Length },
-      { name: 'Base Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link2Thickness, onChange: robot.controls.link2Thickness },
-      { name: 'Tip Thickness', min: 0.02, max: 1, step: 0.01, value: cfg.link2TipThickness, onChange: robot.controls.link2TipThickness },
+      { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.link2Scale, onChange: robot.controls.link2.scale },
+      { name: 'Length', min: 0.3, max: 4, step: 0.05, value: cfg.link2Length, onChange: robot.controls.link2.length },
+      { name: 'Base Thickness', min: 0.05, max: 1, step: 0.01, value: cfg.link2Thickness, onChange: robot.controls.link2.thickness },
+      { name: 'Tip Thickness', min: 0.02, max: 1, step: 0.01, value: cfg.link2TipThickness, onChange: robot.controls.link2.tipThickness },
     ])
     addComponentSection(config, 'Base Joint (sphere)', [
       { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg.baseJointScale, onChange: robot.controls.baseJointScale },

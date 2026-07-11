@@ -1,121 +1,184 @@
 import * as THREE from 'three'
 import { replaceGeometry, makeScaleSetter, makeLinkGeometry, makeTaperedLinkGeometry, createLinkControls, createColorControls } from './geometryControlHelpers.js'
 
-// --- Texture PBR procedurali (nessun asset esterno) ---
-// Il robot è interamente procedurale (primitive Three.js, niente modelli
-// importati) — coerente con questo, anche le sue texture sono generate in
-// codice via <canvas> invece di scaricare file PBR pronti. Tecnica:
-// 1) si disegna un height-field in scala di grigi (il pattern cambia per
-//    materiale: graffi paralleli per il metallo, grana a puntini per la
-//    gomma/plastica); 2) la normal map si ricava dal GRADIENTE dell'altezza
-//    (differenza coi pixel vicini, wrap ai bordi per un tiling seamless);
-//    3) la roughness map usa lo stesso height-field (i graffi/rilievi sono
-//    leggermente più lucidi) più rumore casuale per una variazione organica.
-export function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, roughnessVariation }) {
+// --- Procedural PBR textures ---
+// Most textures are generated in code via <canvas>, matching the fully
+// procedural robot: 1) draw a greyscale height-field (pattern varies by
+// material); 2) normal map from the height GRADIENT (diff vs. neighbor pixels, wrapped
+// at edges for seamless tiling); 3) roughness map reuses the same
+// height-field (scratches read slightly shinier) plus random noise.
+
+
+
+// MAIN GENERATION FUNCTION: given a height-field drawing function, generate the normal and roughness maps from it, plus the height map itself (can be used as bumpMap)
+export function createProceduralPBRMaps({ size = 256, drawHeightField, baseRoughness, roughnessVariation }) 
+{
+  /*
+  Parameters:
+  - size: size of the generated texture (default 256x256)
+  - drawHeightField: function to draw the height field on a canvas context, varies by material
+  - baseRoughness: base roughness value for the material, the roughness map will vary around this value
+  - roughnessVariation: variation in roughness based on the height field, plus some random noise
+
+  Returns:
+  - normalMap: THREE.CanvasTexture for the normal map
+  - roughnessMap: THREE.CanvasTexture for the roughness map
+  - heightMap: THREE.CanvasTexture for the height map (can be used as bumpMap)
+  */
+
+
+  // create a canvas for the height field
+  // This is a HTMLCanvasElement, not a Three.js texture yet. 
+  // i draw the height field on it and then extract the pixel data to compute the normal and roughness maps.
   const heightCanvas = document.createElement('canvas')
   heightCanvas.width = heightCanvas.height = size
-  const hctx = heightCanvas.getContext('2d')
+
+  
+  const hctx = heightCanvas.getContext('2d') //gives the context to draw on the canvas, Browser API
   hctx.fillStyle = '#808080'
   hctx.fillRect(0, 0, size, size)
-  drawHeightField(hctx, size)
-  const heightData = hctx.getImageData(0, 0, size, size).data
-  // modulo per il wrap: il gradiente ai bordi del canvas legge dal lato
-  // opposto invece di "cadere nel vuoto", così la texture si ripete senza
-  // cuciture visibili quando RepeatWrapping la tila sulla mesh
-  const heightAt = (x, y) => {
+  drawHeightField(hctx, size)  //Applies the material-specific height field drawing function to the canvas context
+
+  const heightData = hctx.getImageData(0, 0, size, size).data // get the pixel data of the height field, an Uint8ClampedArray of RGBA values
+
+  // helper function to get the height value at a given (x, y) coordinate + WRAP like angles
+  const heightAt = (x, y) => 
+  {
     const xi = (x + size) % size, yi = (y + size) % size
     return heightData[(yi * size + xi) * 4] / 255
   }
 
+  // NORMAL MAP  
   const normalCanvas = document.createElement('canvas')
   normalCanvas.width = normalCanvas.height = size
   const nctx = normalCanvas.getContext('2d')
-  const normalImg = nctx.createImageData(size, size)
+  const normalImg = nctx.createImageData(size, size) // this time this creates a EMPTY block of pixel data to fill with the computed normal map values
+
+  // ROUGHNESS MAP
   const roughCanvas = document.createElement('canvas')
   roughCanvas.width = roughCanvas.height = size
   const rctx = roughCanvas.getContext('2d')
   const roughImg = rctx.createImageData(size, size)
 
-  const NORMAL_STRENGTH = 2.5 // amplifica il rilievo percepito, l'height-field di per sé è molto sottile
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      // gradiente centrale (differenza coi vicini) sui due assi: la normale
-      // punta "in salita" contro il verso del gradiente, Z=1 di base (piatta)
+  const NORMAL_STRENGTH = 2.5 // amplifica il rilievo percepito
+
+  //THIS IS FOR EVERY PIXEL in the height field, compute the normal and roughness values based on the height gradient and the base roughness + variation
+
+  for (let y = 0; y < size; y++) 
+  {
+    for (let x = 0; x < size; x++) 
+    {
+
+      //Compute the gradient of the height field at (x, y) using central differences
       const dx = (heightAt(x + 1, y) - heightAt(x - 1, y)) * NORMAL_STRENGTH
       const dy = (heightAt(x, y + 1) - heightAt(x, y - 1)) * NORMAL_STRENGTH
-      const len = Math.hypot(dx, dy, 1)
-      const i = (y * size + x) * 4
+
+      const len = Math.hypot(dx, dy, 1) // length of the vector (dx, dy, 1) to normalize it
+      const i = (y * size + x) * 4      // index in the pixel data array (4 values per pixel: R, G, B, A)
+
+      // compute the normal vector and store it in the normal image data
+      // The normal vector is encoded in RGB as follows:
+      // R = (-dx / len * 0.5 + 0.5) * 255
+      // G = (-dy / len * 0.5 + 0.5) * 255
+      // B = (1 / len * 0.5 + 0.5) * 255
+      // A = 255 (fully opaque)
+
       normalImg.data[i] = (-dx / len * 0.5 + 0.5) * 255
       normalImg.data[i + 1] = (-dy / len * 0.5 + 0.5) * 255
       normalImg.data[i + 2] = (1 / len * 0.5 + 0.5) * 255
       normalImg.data[i + 3] = 255
 
       const h = heightAt(x, y)
-      const roughness = THREE.MathUtils.clamp(
+      // compute the roughness value based on the height and the base roughness + variation
+      const roughness = THREE.MathUtils.clamp
+      (
         baseRoughness + (h - 0.5) * -0.3 + (Math.random() - 0.5) * roughnessVariation, 0, 1
       ) * 255
+
+      // store the roughness value in the roughness image data (same value for R, G, B, A = 255)
       roughImg.data[i] = roughImg.data[i + 1] = roughImg.data[i + 2] = roughness
       roughImg.data[i + 3] = 255
     }
   }
+  // put the computed normal and roughness image data back to the canvas contexts
   nctx.putImageData(normalImg, 0, 0)
   rctx.putImageData(roughImg, 0, 0)
 
+  // create THREE.CanvasTexture from the canvases
   const normalMap = new THREE.CanvasTexture(normalCanvas)
   const roughnessMap = new THREE.CanvasTexture(roughCanvas)
-  // l'height-field grezzo (heightCanvas), esposto anche come bumpMap: un
-  // termine di shading complementare alla normal map, economico, per un
-  // rilievo micro-superficie extra su materiali che non l'avevano ancora
-  // (panchine/palo lampione in main.js)
   const heightMap = new THREE.CanvasTexture(heightCanvas)
+
+  // set the wrapping mode to RepeatWrapping for seamless tiling
   normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping
   roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping
   heightMap.wrapS = heightMap.wrapT = THREE.RepeatWrapping
+
+  // set the repeat factor to 4x4 for all maps
   normalMap.repeat.set(4, 4)
   roughnessMap.repeat.set(4, 4)
   heightMap.repeat.set(4, 4)
+
   return { normalMap, roughnessMap, heightMap }
 }
 
-// pattern "metallo spazzolato": righe sottili quasi orizzontali, luminosità
-// e spessore casuali — per bodyMat/armMat (chassis, braccio, giunti)
-export function drawBrushedMetal(ctx, size, count = 400) {
-  for (let i = 0; i < count; i++) {
+
+export function drawBrushedMetal(ctx, size, count = 400) 
+{
+  /*
+  Parameters:
+  - ctx: canvas 2D context to draw on
+  - size: size of the canvas (width and height)
+  - count: number of brush strokes to draw (default 400)
+
+  This function draws a brushed metal pattern on the given canvas context. 
+  It does so by drawing a number of horizontal lines with slight variations 
+  in brightness and position to simulate the appearance of brushed metal.
+  */
+
+  for (let i = 0; i < count; i++) 
+    {
     const y = Math.random() * size
     const bright = 128 + (Math.random() - 0.5) * 18
     ctx.strokeStyle = `rgb(${bright},${bright},${bright})`
-    ctx.lineWidth = Math.random() < 0.5 ? 1 : 2
-    ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(size, y + (Math.random() - 0.5) * 4)
-    ctx.stroke()
+    ctx.lineWidth = Math.random() < 0.5 ? 1 : 2  //50% chance of line width 1 or 2
+    ctx.beginPath()                                 // start a new path for the line
+    ctx.moveTo(0, y)                                // move to the left edge of the canvas at height y
+    ctx.lineTo(size, y + (Math.random() - 0.5) * 4) // draw a line to the right edge of the canvas, with a slight vertical offset
+    ctx.stroke()                                    // actually draw the line on the canvas
   }
 }
 
-// pattern "grana gomma/plastica": puntini sparsi di dimensione e luminosità
-// variabili — per wheelMat (gomma ruote) e accentMat (plastica paletta),
-// riusata anche da LeggedManipulatorModelMaker() (piedi in gomma)
-export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) {
+
+export function drawOrganicGrain(ctx, size, count = 900, maxRadius = 2.5) 
+{
+
+  /*
+  Parameters:
+  - ctx: canvas 2D context to draw on
+  - size: size of the canvas (width and height)
+  - count: number of grains to draw (default 900)
+  - maxRadius: maximum radius of the grains (default 2.5)
+
+  This function draws an organic grain pattern on the given canvas context.
+  */
+
   for (let i = 0; i < count; i++) {
     const x = Math.random() * size, y = Math.random() * size
     const r = 1 + Math.random() * maxRadius
     const bright = 128 + (Math.random() - 0.5) * 40
     ctx.fillStyle = `rgb(${bright},${bright},${bright})`
     ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.arc(x, y, r, 0, Math.PI * 2) // draw a circle at (x, y) with radius r
     ctx.fill()
   }
 }
 
-// armMat/accentMat (braccio 3R/paletta) erano ridefiniti IDENTICI (stesso
-// colore/roughness/metalness/parametri PBR) in tutti e 3 i ModelMaker —
-// a differenza di bodyMat/wheelMat/legMat/footMat/skidMat, che DIFFERISCONO
-// davvero da classe a classe (tinte/roughness diverse per corpo/gomma/
-// pattino) e restano quindi locali a ognuno. Estratti qui (non in un file
-// a parte) perché AMRManipulatorModelMaker.js è già il modulo "sorgente"
-// di createProceduralPBRMaps/drawBrushedMetal/drawOrganicGrain, importato
-// dagli altri due
-export function createArmAccentMaterials() {
+export function createArmAccentMaterials() 
+{
+  /*
+  This function creates the materials for the arm and accent parts of the manipulator.
+  */
   const armMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 550), baseRoughness: 0.4, roughnessVariation: 0.1 })
   const accentMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 1400, 1.4), baseRoughness: 0.3, roughnessVariation: 0.1 })
   return {
@@ -124,31 +187,35 @@ export function createArmAccentMaterials() {
   }
 }
 
-// Classe MANIPULATOR: locomozione a ruote, manipolatore 3R sopra un disco.
-// R1 (base) ruota su asse verticale (yaw). R2/R3 (gomito/polso) ruotano
-// su asse orizzontale (pitch), come un braccio planare montato su una
-// base rotante. Bracci dimensionati per sporgere oltre il bordo del
-// disco a riposo, per poter palleggiare senza scontrarsi con lo chassis.
+// MANIPULATOR class: wheeled locomotion, 3R arm on top of a disc. R1 (base)
+// yaws (vertical axis); R2/R3 (elbow/wrist) pitch (horizontal axis) — a
+// planar arm on a rotating base. Arms sized to clear the disc edge so
+// dribbling doesn't hit the chassis.
 //
-// Geometrie non ridimensionabili "in place" in Three.js: length/thickness/
-// radius vanno ricostruite (dispose + nuova geometry) a ogni cambio. La
-// posizione dei giunti a valle (gomito/polso) dipende dalla lunghezza del
-// link a monte e va ricalcolata quando questa cambia.
-export function AMRManipulatorModelMaker() {
-  const root = new THREE.Group()
+// Geometries can't be resized in place in Three.js: length/thickness/radius
+// require a full rebuild (dispose + new geometry). A downstream joint's
+// position depends on its upstream link's length and must be recomputed
+// whenever that length changes.
 
-  // baseRoughness passato a createProceduralPBRMaps combacia col roughness
-  // "piatto" del materiale: la roughness map poi ci varia sopra, non lo sostituisce
+export function AMRManipulatorModelMaker() 
+{
+  /*
+  This function creates the 3D model of the AMR manipulator robot, including the wheels, chassis, and manipulator arm.
+  Returns an object containing the root THREE.Group of the model and a set of controls to manipulate the model's parameters.
+  */
+
+  const root = new THREE.Group() // root group for the entire robot model
+
+  
+  // --- Materials: procedural PBR textures for body, wheels, arm, and accent ---
   const bodyMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawBrushedMetal(ctx, s, 350), baseRoughness: 0.5, roughnessVariation: 0.12 })
   const wheelMaps = createProceduralPBRMaps({ drawHeightField: (ctx, s) => drawOrganicGrain(ctx, s, 900, 2.5), baseRoughness: 0.8, roughnessVariation: 0.15 })
-
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.4, normalMap: bodyMaps.normalMap, roughnessMap: bodyMaps.roughnessMap })
   const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.1, normalMap: wheelMaps.normalMap, roughnessMap: wheelMaps.roughnessMap })
   const { armMat, accentMat } = createArmAccentMaterials()
 
-  // stato corrente dei parametri modificabili da debug, usato sia per
-  // ricostruire le geometrie sia per COPY config. Valori di partenza presi
-  // da "Copy config" dopo tuning visivo via pannello DEBUG (tasto P)
+  // Parameters visually tuned
+  // Debug panel is basically usable to get other tweaks
   const state = {
     manipulatorScale: 45,
     wheelsScale: 0.55,
@@ -159,20 +226,20 @@ export function AMRManipulatorModelMaker() {
     link1Thickness: 0.18,
     link2Scale: 1,
     link2Length: 1.5,
-    link2Thickness: 0.17,      // spessore alla base (lato gomito)
-    link2TipThickness: 0.05,   // spessore in punta (lato polso) — trapezoidale, molto più sottile della base
+    link2Thickness: 0.17,      // Base thickness
+    link2TipThickness: 0.05,   // Tip thickness (tapered)
     baseJointScale: 1,
     elbowJointScale: 0.75,
     endEffectorScale: 0.25,
-    paddleAngle: 2.4, // apertura totale della V tra le due palette (rad) — baseline molto aperta, coincide con l'estremo dello slider (PADDLE_ANGLE_MAX in main.js)
-    paddleTilt: 1.2,  // inclinazione extra della paletta (oltre al livellamento auto), verso il basso — baseline all'estremo dello slider (PADDLE_TILT_MAX in main.js)
+    paddleAngle: 2.4,          //Angle of the paddle (V shape) in radians, 0 = closed, PADDLE_ANGLE_MAX = fully open
+    paddleTilt: 1.2,           //Inclination of the paddle (V shape) in radians, 0 = horizontal, positive = downwards
   }
-  const INITIAL_DISC_RADIUS = state.discRadius
 
-  // --- Ruote: 4 mini tori neri verticali, in gruppo (relative al disco) ---
-  // il toro giace nel piano XY (centro→bordo esterno = wheelRadius+wheelTube
-  // in ogni direzione), quindi il centro va messo a raggio esterno da terra
-  // perché il bordo inferiore tocchi y=0, non a wheelRadius da solo
+  const INITIAL_DISC_RADIUS = state.discRadius  // used to compute the wheelsGroup scale relative to the disc radius
+
+  // --- Wheels: 4 toroidal wheels at the corners of a square ---
+  // First we build a torus geometry for the wheels, then we create 4 instances of it and position them at the corners of a square. 
+  // The wheels are added to a group so we can scale and rotate them together.
   const wheelRadius = 0.4
   const wheelTube = 0.15
   const wheelOuterRadius = wheelRadius + wheelTube
@@ -180,21 +247,25 @@ export function AMRManipulatorModelMaker() {
   const wheelOffsetX = 0.9
   const wheelOffsetZ = 0.9
   const wheelsGroup = new THREE.Group()
-  ;[
+  const wheelOffsets = 
+  [
     [-wheelOffsetX, -wheelOffsetZ],
     [wheelOffsetX, -wheelOffsetZ],
     [-wheelOffsetX, wheelOffsetZ],
     [wheelOffsetX, wheelOffsetZ],
-  ].forEach(([x, z]) => {
-    const wheel = new THREE.Mesh(wheelGeo, wheelMat)
+  ]
+  for (let i = 0; i < wheelOffsets.length; i++) {
+    const [x, z] = wheelOffsets[i]
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat) //Three Mesh takes a geometry and a material, and creates a renderable object
     wheel.position.set(x, wheelOuterRadius, z)
     wheelsGroup.add(wheel)
-  })
+  }
   root.add(wheelsGroup)
 
-  // --- Chassis: piattaforma a disco sopra le ruote ---
+  // --- Chassis: a disc on top of the wheels, with the manipulator arm mounted on it ---
   const discHeight = 0.1875 // 75% di 0.25
-  const disc = new THREE.Mesh(
+  const disc = new THREE.Mesh
+  (
     new THREE.CylinderGeometry(state.discRadius, state.discRadius, discHeight, 32),
     bodyMat
   )
@@ -203,34 +274,23 @@ export function AMRManipulatorModelMaker() {
   // --- Manipolatore 3R sul disco ---
   const jointRadius = 0.22
 
-  // R1: base del manipolatore, yaw attorno a Y, in cima al disco
-  // (position.y assegnata più sotto da syncChassisHeight, dipende dalla
-  // scala effettiva delle ruote)
+
+  // Base is a group that contains the base joint and the link1Group.
   const base = new THREE.Group()
   root.add(base)
 
   const baseJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius, 16, 16), armMat)
   base.add(baseJoint)
 
-  // makeLinkGeometry/makeTaperedLinkGeometry ora in geometryControlHelpers.js
-  // (condivise dai 3 ModelMaker, robot-agnostiche — vedi import in cima)
-
-  // link1Group: giunto di "spalla" in più oltre al 3R nominale (che resta
-  // base→link1→gomito→link2→polso). Serve solo a dare a link1 una leggera
-  // inclinazione secondaria durante il palleggio (setDribbleLink1). Gomito
-  // (e tutto ciò che segue) è agganciato QUI SOTTO, non a `base` come
-  // prima: così segue la rotazione di link1Group invece di restare
-  // indietro e scollegarsi visivamente quando link1 si inclina
+  // Link1Group is a group that contains link1 and the elbow joint. It is positioned at the top of the base joint.
   const link1Group = new THREE.Group()
   base.add(link1Group)
 
   const link1 = new THREE.Mesh(makeLinkGeometry(state.link1Length, state.link1Thickness), armMat)
   link1Group.add(link1)
 
-  // R2: gomito, pitch attorno a X, all'estremità del link1
-  // rest pose: braccio piegato in avanti così sporge oltre il disco
-  const ELBOW_REST_PITCH = Math.PI / 2.4
-  const elbow = new THREE.Group()
+
+  const ELBOW_REST_PITCH = Math.PI / 2.4 // Resting is slightly bent 
   elbow.position.y = state.link1Length
   elbow.rotation.x = ELBOW_REST_PITCH
   link1Group.add(elbow)
@@ -238,13 +298,15 @@ export function AMRManipulatorModelMaker() {
   const elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(jointRadius * 0.85, 16, 16), armMat)
   elbow.add(elbowJoint)
 
-  const link2 = new THREE.Mesh(
+  const link2 = new THREE.Mesh
+  (
     makeTaperedLinkGeometry(state.link2Length, state.link2Thickness, state.link2TipThickness),
     armMat
   )
+
   elbow.add(link2)
 
-  // R3: polso, pitch attorno a X, all'estremità del link2
+  // End effector: wrist group, positioned at the end of link2, with a slight downward pitch
   const WRIST_REST_PITCH = -Math.PI / 6
   const wrist = new THREE.Group()
   wrist.position.y = state.link2Length
@@ -255,19 +317,14 @@ export function AMRManipulatorModelMaker() {
   const endEffector = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), accentMat)
   wrist.add(endEffector)
 
-  // Paletta a "V rovesciata": due palette gemelle che condividono lo stesso
-  // bordo di aggancio (quello sull'end effector) invece di un'unica paletta
-  // piatta. paddleGroup fa da perno comune (leveling, vedi sotto); ogni
-  // paddleLeft/Right è ruotata di ±metà apertura ATTORNO A QUEL BORDO,
-  // quindi vista di taglio lungo il bordo (il "-" piatto di prima) le due
-  // metà divergono a V invece di restare allineate.
+
+  // Paddle: two flat boxes forming a V shape, attached to the wrist. The paddle is used to hit the ball in the game.
   const paddleWidth = 0.35 // lato corto (Z)
   const paddleGeo = new THREE.BoxGeometry(0.5, 0.05, paddleWidth)
-  // sposta il pivot dal centro della paletta al centro del lato lungo
-  // (bordo Z), così la sfera end-effector risulta attaccata lì, non al
-  // centro della paletta — segno positivo: la paletta si estende verso
-  // l'esterno del braccio, non verso il corpo del robot. Geometria
-  // condivisa fra le due metà: stessa forma, non serve duplicarla
+
+  // The paddle geometry is translated so that its local origin is at the hinge point 
+  // (the edge of the box), not at the center. This way, when we rotate the paddle halves, 
+  // they rotate around the hinge.
   paddleGeo.translate(0, 0, paddleWidth / 2)
 
   const paddleGroup = new THREE.Group()
@@ -276,136 +333,104 @@ export function AMRManipulatorModelMaker() {
   const paddleRight = new THREE.Mesh(paddleGeo, accentMat)
   paddleGroup.add(paddleLeft, paddleRight)
 
-  // punto di riferimento per il tracking esterno (es. la palla in main.js):
-  // al centro reale della paletta (sulla bisettrice, a metà tra le due
-  // metà), non sul bordo di aggancio/giunto — un Object3D invisibile,
-  // figlio di paddleGroup (non delle singole metà: sta sulla bisettrice,
-  // non eredita l'apertura a V di una sola delle due)
+ // Tracking point for the paddle: this is the point that external code (like main.js) 
+ // will use to track the position of the paddle.
   const paddleCenter = new THREE.Object3D()
   paddleGroup.add(paddleCenter)
-  // secondo punto di aggancio, SOLO per HANDLING/tiro in main.js (il
-  // palleggio automatico continua a usare paddleCenter sopra, invariato):
-  // non il centro "piatto" delle due metà, ma il punto in cui le loro
-  // normali, estruse, si incontrano — dove una palla incastrata nella V
-  // toccherebbe davvero entrambe le facce. Vedi updatePaddleCenter() sotto
-  // per la derivazione geometrica
+
+  // Second tracking point, only for HANDLING/shooting: where the two
+  // halves' normals converge, not their flat midpoint. See updatePaddleCenter().
   const ballRestPoint = new THREE.Object3D()
   paddleGroup.add(ballRestPoint)
-  // offset di chiusura extra sopra paddleAngle (che resta "forma", tracciata
-  // in state e nel Copy Config) — usato dalla presa HANDLING in main.js per
-  // stringere la V senza toccare la configurazione salvata, stesso principio
-  // di aimPitchOffset/dribbleElbowOffset qui sotto
+
+  // Extra closing offset on top of paddleAngle (kept as "shape" in state/Copy Config).
   let gripOffset = 0
-  function effectivePaddleAngle() {
-    return Math.max(state.paddleAngle - gripOffset, 0)
+  function effectivePaddleAngle() 
+  {
+    return Math.max(state.paddleAngle - gripOffset, 0) // clamp to 0 to avoid negative angles
   }
-  // tiro (main.js): apre la V verso l'alto/orizzontale invece che verso il
-  // basso durante il rilascio — offset sommato SOPRA state.paddleTilt (che
-  // resta la "forma"/baseline di presa tracciata in state e Copy Config),
-  // stesso principio di gripOffset qui sopra
+
+  // Shooting: opens the V upward instead of downward during release.
   let shootTiltOffset = 0
-  // ATTENZIONE: paddleWidth/2 sarebbe la Z solo ad angolo=0 (palette
-  // piatte). Ogni metà è ruotata di ±angolo/2 attorno al bordo comune
-  // (Z=0): il suo punto medio (Z=paddleWidth/2 nel proprio frame non
-  // ruotato) si sposta a Z=(paddleWidth/2)·cos(angolo/2) una volta
-  // ruotato — più la V si apre, più il centro reale si "ripiega" verso il
-  // bordo invece di restare alla distanza nominale. Senza questo, con
-  // angolo vicino al massimo il punto di tracking finiva ben oltre la
-  // superficie vera della paletta (palla "staccata")
-  // extra distanza (mondo, sommata oltre il punto geometrico) lungo la
-  // stessa direzione locale Z — il punto di convergenza esatto è corretto
-  // "di luogo" ma visivamente troppo vicino alla camera/al polso, questo lo
-  // spinge oltre. Regolabile da main.js (setBallRestOffset), non tracciata
-  // in state/Copy Config: è una correzione percettiva, non la "forma"
+
+  // Perceptual correction only, not real geometry: pushes ballRestPoint further out.
   let ballRestExtraOffset = 0
-  function updatePaddleCenter() {
+  function updatePaddleCenter() // called whenever paddleAngle or ballRestExtraOffset changes
+  {
     const halfAngle = effectivePaddleAngle() / 2
     const d = paddleWidth / 2
+    // Flat midpoint of a half rotated by halfAngle: projects shorter by cos.
     paddleCenter.position.set(0, 0, d * Math.cos(halfAngle))
-    // le due metà sono ruotate di ±halfAngle attorno alla cerniera comune
-    // (Z=0 nel frame di paddleGroup): per simmetria (specchiate su Y) le
-    // loro normali si incontrano esattamente sul piano Y=0, a distanza
-    // d/cos(halfAngle) — non d·cos come sopra. Ad angolo→0 (V chiusa)
-    // 1/cos→1: torna al centro piatto, coerente (senza V non c'è
-    // convergenza da cercare). d·cos e d/cos sono la stessa quantità solo
-    // ad angolo=0; halfAngle resta ben sotto i 90° del caso degenere
-    // (PADDLE_ANGLE_MAX/2 ≈ 69°), quindi mai vicino alla singolarità
+    // Where the two mirrored normals meet: grows by 1/cos as the V opens
+    // (opposite of paddleCenter above). Both converge to d at angle 0.
     ballRestPoint.position.set(0, 0, d / Math.cos(halfAngle) + ballRestExtraOffset)
   }
   updatePaddleCenter()
 
-  // link1Group/gomito/polso ruotano tutti sullo stesso asse (X) quindi i
-  // pitch si sommano (le rotazioni attorno allo stesso asse locale, in una
-  // catena padre-figlio senza yaw intermedio, si sommano linearmente):
-  // senza contro-rotazione la paletta erediterebbe l'inclinazione netta
-  // del braccio invece di restare piatta/orizzontale, pronta a palleggiare.
-  // Livella il gruppo intero (perno comune); paddleTilt è un'inclinazione
-  // EXTRA voluta sopra il livellamento (per orientare la paletta verso il
-  // basso), l'apertura a V delle due metà è un'ulteriore rotazione LOCALE
-  // sopra tutto questo — resta valida indipendentemente da come punta il braccio
-  function levelPaddle() {
+  // The paddle must stay level (horizontal) relative to the world, not the wrist,
+  function levelPaddle() // called whenever link1Group.rotation.x, elbow.rotation.x, or state.paddleTilt changes
+  {
     paddleGroup.rotation.x = -(link1Group.rotation.x + elbow.rotation.x + WRIST_REST_PITCH) + state.paddleTilt + shootTiltOffset
   }
-  function applyPaddleAngle() {
+
+  function applyPaddleAngle() // called whenever state.paddleAngle or gripOffset changes
+  {
     const angle = effectivePaddleAngle()
     paddleLeft.rotation.x = angle / 2
     paddleRight.rotation.x = -angle / 2
     updatePaddleCenter()
   }
 
-  // Il pitch del gomito arriva da due sorgenti indipendenti che si sommano
-  // (mira camera in Play + palleggio automatico, sempre attivo): tenute
-  // separate invece di un valore unico così le due animazioni non si
-  // sovrascrivono a vicenda quando entrambe attive
+  //Elbow Pitch Offsets
   let aimPitchOffset = 0
   let dribbleElbowOffset = 0
-  function applyArmPitch() {
+  function applyArmPitch() 
+  {
     elbow.rotation.x = ELBOW_REST_PITCH + aimPitchOffset + dribbleElbowOffset
     levelPaddle()
   }
 
+  //  Initial application of the paddle angle and level 
   levelPaddle()
   applyPaddleAngle()
 
-  // combina scala manuale ruote × rapporto raggio disco/iniziale, così le
-  // ruote seguono automaticamente l'espansione/contrazione del disco
-  function applyWheelsGroupScale() {
+  // Helpers to apply wheelsGroup scale and sync chassis height 
+  function applyWheelsGroupScale()
+  {
     wheelsGroup.scale.setScalar(state.wheelsScale * (state.discRadius / INITIAL_DISC_RADIUS))
   }
 
-  // il disco deve appoggiare sul bordo superiore reale delle ruote: dato
-  // che wheelsGroup ha una propria scala (regolabile da debug), l'altezza
-  // delle ruote non è più un valore fisso — va ricalcolata ogni volta che
-  // cambia la scala del gruppo ruote, altrimenti disco/ruote si staccano
+  // Sync the chassis height based on the wheels and disc dimensions
   function syncChassisHeight() {
-    // centro ruota a wheelOuterRadius da terra + estensione verso l'alto
-    // pari a wheelOuterRadius = bordo superiore reale del toro
+    // The disc's top surface should be slightly embedded 
+    // into the wheels for a solid attachment, without protruding above them.
     const wheelTopLocal = wheelOuterRadius * 2
     const wheelTopWorld = wheelTopLocal * wheelsGroup.scale.y
-    // leggera compenetrazione nel disco (35% dello spessore) per un
-    // aggancio più solido, senza sbucare sopra (35% < 100% = resta margine)
+    
+    // The disc's top surface should be slightly embedded into the wheels 
+    // for a solid attachment, without protruding above them.
     const embed = discHeight * 0.35
     const discY = wheelTopWorld + discHeight / 2 - embed
     disc.position.y = discY
     base.position.y = discY + discHeight / 2
   }
 
-  // ruote/chassis agganciati subito alla scala iniziale (le altre parti si
-  // auto-applicano più sotto, richiamando i setter di controls)
+  // Initial application of wheels scale and chassis height
   applyWheelsGroupScale()
   syncChassisHeight()
 
-  // replaceGeometry/makeScaleSetter/createLinkControls ora in
-  // geometryControlHelpers.js (condivise dai 3 ModelMaker) — prendono
-  // `state` esplicito come primo argomento invece di chiuderlo
-
-  const controls = {
+  
+  // --- Controls: exposed to main.js for runtime manipulation of the model ---
+  const controls = 
+  {
     manipulatorScale: makeScaleSetter(state, 'manipulatorScale', root),
+
     wheelsScale(s) {
       state.wheelsScale = s
       applyWheelsGroupScale()
       syncChassisHeight()
     },
+
     discScale: makeScaleSetter(state, 'discScale', disc),
     discRadius(r) {
       state.discRadius = r
@@ -413,95 +438,99 @@ export function AMRManipulatorModelMaker() {
       applyWheelsGroupScale()
       syncChassisHeight()
     },
-    ...createLinkControls(state, {
+
+    link1: createLinkControls(state, {
       statePrefix: 'link1', mesh: link1, downstreamJoint: elbow,
       buildGeometry: makeLinkGeometry, thicknessNames: ['Thickness'],
     }),
-    ...createLinkControls(state, {
+
+    link2: createLinkControls(state, {
       statePrefix: 'link2', mesh: link2, downstreamJoint: wrist,
       buildGeometry: makeTaperedLinkGeometry, thicknessNames: ['Thickness', 'TipThickness'],
     }),
+
+
     baseJointScale: makeScaleSetter(state, 'baseJointScale', baseJoint),
     elbowJointScale: makeScaleSetter(state, 'elbowJointScale', elbowJoint),
     endEffectorScale: makeScaleSetter(state, 'endEffectorScale', endEffector),
 
-    // --- Posa (mira/sterzata), non tracciata in state: cambia ogni frame,
-    // non è pensata per "Copy config" come le dimensioni sopra ---
+    // Yaw of the base joint (R1) — rotates the entire arm around the vertical axis
     setAimYaw(angle) {
       base.rotation.y = angle
     },
-    // offset di pitch relativo al riposo: la cinematica (gomito+polso sullo
-    // stesso asse si sommano, la paletta va rilivellata di conseguenza)
-    // resta qui, invece che duplicata anche in main.js
-    setAimPitch(pitchOffset) {
+
+    // Pitch of the elbow joint (R2) — rotates the link2 and wrist around the horizontal axis
+    setAimPitch(pitchOffset) 
+    {
       aimPitchOffset = pitchOffset
       applyArmPitch()
     },
-    // palleggio automatico (sempre attivo, non solo Play): offset di pitch
-    // su gomito e link1 (proporzionale, ampiezza minore, decisa da chi
-    // chiama in main.js) applicati insieme in una sola chiamata — prima
-    // erano due setter separati (setDribbleElbow/setDribbleLink1) chiamati
-    // in sequenza da main.js, ognuno con la propria chiamata a levelPaddle():
-    // la prima leggeva link1Group.rotation.x non ancora aggiornato dalla
-    // seconda, quindi il suo risultato veniva scartato subito dopo — un
-    // ricalcolo scartato ad ogni singolo passo del palleggio (120/s)
+
+    // Pitch offsets for dribbling: moves the elbow and link1 to adjust the paddle height 
+    // without changing the paddle shape
     setDribbleOffsets(elbowOffset, link1Offset) {
       dribbleElbowOffset = elbowOffset
       link1Group.rotation.x = link1Offset
       applyArmPitch()
     },
-    // presa HANDLING (main.js): stringe la V della paletta senza toccare
-    // paddleAngle/state — offset (rad) sottratto dall'apertura configurata
+
+    // Grip offset: adds an extra closing offset on top of paddleAngle, without changing the paddle shape
     setGrip(offset) {
       gripOffset = offset
       applyPaddleAngle()
     },
-    // tiro (main.js): apre la V verso l'alto/orizzontale invece che verso il
-    // basso — offset sommato sopra state.paddleTilt in levelPaddle(), la
-    // "forma"/baseline di presa (Copy Config) resta intatta
+
+    // Tilt offset for shooting: adds an extra tilt to the paddle during 
+    // shooting, without changing the paddle shape
     setShootTilt(offset) {
       shootTiltOffset = offset
       levelPaddle()
     },
-    // sposta ballRestPoint (HANDLING/tiro, non paddleCenter/palleggio) più
-    // lontano dalla cerniera lungo la stessa direzione — correzione
-    // percettiva "quanto lontano dalla camera", non una nuova geometria
+
+    // Extra offset for the ball rest point: moves the ball rest point further out, without changing the paddle shape
+    // This is used to adjust the position of the ball rest point for better handling/shooting
     setBallRestOffset(extra) {
       ballRestExtraOffset = extra
       updatePaddleCenter()
     },
-    paddleAngle(a) {
+
+    // Paddle angle: sets the angle of the paddle (V shape) in radians, 0 = closed, PADDLE_ANGLE_MAX = fully open
+    paddleAngle(a) 
+    {
       state.paddleAngle = a
       applyPaddleAngle()
       updatePaddleCenter()
     },
+
+    // Paddle tilt: sets the inclination of the paddle (V shape) in radians, 0 = horizontal, positive = downwards
     paddleTilt(angle) {
       state.paddleTilt = angle
       levelPaddle()
     },
+
+    // Sets the yaw of the wheels group (for steering) in radians
     setWheelsYaw(angle) {
       wheelsGroup.rotation.y = angle
     },
+    // Expose color controls for body, arm, and accent materials
     ...createColorControls({ body: bodyMat, arm: armMat, accent: accentMat }),
   }
 
-  // applica gli scale iniziali (disc/link1/link2/giunti) richiamando gli
-  // stessi setter esposti in controls, invece di duplicarne la logica
+  // Apply initial scales to the model parts based on the state
   controls.discScale(state.discScale)
-  controls.link1Scale(state.link1Scale)
-  controls.link2Scale(state.link2Scale)
+  controls.link1.scale(state.link1Scale)
+  controls.link2.scale(state.link2Scale)
   controls.baseJointScale(state.baseJointScale)
   controls.elbowJointScale(state.elbowJointScale)
   controls.endEffectorScale(state.endEffectorScale)
 
-  function getConfig() {
+  // Return a copy of the current configuration state
+  function getConfig() 
+  {
     return { ...state }
   }
 
-  // updateHandling in main.js legge paddleTilt ad ogni frame solo per
-  // appiattire la paletta in HANDLING — getConfig() farebbe una clone
-  // completa dello state (usata altrove per "Copy Config") solo per un
-  // singolo campo; questo evita l'allocazione nel percorso a ogni frame
+  // Return the current paddle tilt value
   function getPaddleTilt() {
     return state.paddleTilt
   }

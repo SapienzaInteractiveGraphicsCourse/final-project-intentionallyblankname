@@ -1,5 +1,5 @@
 import { LeggedManipulatorModelMaker } from './ModelMakers/LeggedManipulatorModelMaker.js'
-import { RobotBase } from './RobotBase.js'
+import { RobotBase, RobotState } from './RobotBase.js'
 
 // stat LEGGED MANIPULATOR: più lento a spostarsi di MANIPULATOR (gambe,
 // non ruote) ma migliore su tiro/difesa — differenzia davvero il roster
@@ -68,6 +68,14 @@ export class LeggedManipulator extends RobotBase {
 
   get specialMoveMaxCharges() { return 1 }
   get specialMoveCooldownTime() { return JUMP_COOLDOWN }
+
+  // Jump solo a palla NON in mano (NO_BALL) — saltare mentre si palleggia
+  // (DRIBBLE) o si mira (HANDLING) interferirebbe con la palla, che segue
+  // sempre la paletta: root.position.y che si sposta di JUMP_HEIGHT in
+  // mezzo a un palleggio/mira trascinerebbe la palla via con sé
+  canUseSpecialMove() {
+    return this.state === RobotState.NO_BALL && super.canUseSpecialMove()
+  }
 
   onSpecialMoveStart() {
     this.specialMoveState.phase = 'crouch'

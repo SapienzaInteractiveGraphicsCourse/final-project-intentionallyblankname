@@ -10,14 +10,10 @@ import { Sky } from 'three/addons/objects/Sky.js'
 import { AMRManipulator, MANIPULATOR_STATS } from './robots/AMRManipulator.js'
 import { LeggedManipulator, LEGGED_MANIPULATOR_STATS } from './robots/LeggedManipulator.js'
 import { Drone, DRONE_STATS, droneTuning } from './robots/Drone.js'
-import { ROBOT_KEYS, getSelectedRobotKey, getSelectedEnemyRobotKey, setSelectedRobotKey, setSelectedEnemyRobotKey } from './state/RobotSelection.js'
-import { getSavedAllyColors, saveAllyColors } from './state/RobotColors.js'
-import { Team } from './state/Team.js'
+import { ROBOT_KEYS, Team, GameMode, TimeOfDay } from './SharedEnums.js'
 import { RobotState } from './robots/RobotBase.js'
 import { createProceduralPBRMaps, drawBrushedMetal } from './robots/ModelMakers/AMRManipulatorModelMaker.js'
 import { Basketball, BallState } from './gameplay/Basketball.js'
-import { GameMode } from './state/GameMode.js'
-import { TimeOfDay } from './state/TimeOfDay.js'
 import { SoundEffects } from './audio/SoundEffects.js'
 import { CollisionWorld, RIM_RING_RADIUS, RIM_TUBE_RADIUS } from './gameplay/CollisionWorld.js'
 import { initMainMenu } from './ui/MainMenu.js'
@@ -130,33 +126,44 @@ const sky = new Sky()
 sky.scale.setScalar(4800)
 scene.add(sky)
 
-// converte elevazione/azimuth (gradi) in un vettore direzione unitario per
-// l'uniform sunPosition dello shader Sky — stessa formula standard usata
-// negli esempi three.js (phi da zenit, non da orizzonte)
-function sunDirectionFromElevAzim(elevationDeg, azimuthDeg, target = new THREE.Vector3()) {
-  const phi = THREE.MathUtils.degToRad(90 - elevationDeg)
-  const theta = THREE.MathUtils.degToRad(azimuthDeg)
-  return target.setFromSphericalCoords(1, phi, theta)
-}
+// NIGHT non usa lo Sky procedurale: il modello Preetham è pensato per la
+// luce diurna che si disperde nell'atmosfera, sotto l'orizzonte degenera in
+// sfumature/schiarimenti indesiderati vicino al bordo invece di un buio
+// pulito — segnalato dal vivo ("hai rovinato la notte") confrontato col
+// vecchio colore piatto (`scene.background = new THREE.Color(0x0a1030)`,
+// da prima dell'introduzione dello Sky). Colore ripristinato identico, ma
+// applicato SOLO a riposo su NIGHT (sky.visible=false + questo colore) —
+// durante la transizione verso/da NIGHT lo Sky resta visibile e animato
+// come le altre 3 fasi (vedi updateTimeOfDayTransition), lo scambio con la
+// versione piatta scatta solo a fade completato
+const NIGHT_FLAT_BG = 0x0a1030
 
 // preset di illuminazione scelti nel main menu (fase del giorno) — colore e
 // intensità di hemi/sun, posizione del sole (basso all'alba/tramonto, alto a
 // mezzogiorno) e look atmosferico dello Sky (torbidità/rayleigh/mie).
-// skyElevation/skyAzimuth sono SEPARATI da sunPos: sunPos è la luce vera
-// (serve solo una direzione d'ombra coerente, l'intensità bassa fa il resto
-// del lavoro per NIGHT — motivo per cui resta "alta" come DAY), ma il modello
-// Preetham dello Sky renderizza un cielo diurno azzurro ogni volta che il
-// sole è sopra l'orizzonte, qualunque sia torbidità/rayleigh — per NIGHT il
-// sole del cielo deve scendere sotto l'orizzonte (elevation negativa),
-// altrimenti lo skybox sembrerebbe pieno giorno anche di notte.
+// La direzione del sole nello Sky NON è più un parametro a parte
+// (skyElevation/skyAzimuth, rimossi) — bug reale segnalato dal vivo ("il
+// gradiente chiaro del cielo non matcha da dove viene la luce"): tenerli
+// scollegati da sunPos (la posizione vera della DirectionalLight) li aveva
+// disallineati di 80-100° in tutti e 3 i preset diurni, il bagliore caldo
+// dello Sky appariva in tutt'altra direzione rispetto a dove cadevano
+// davvero le ombre. Ora la direzione del sole nello Sky è SEMPRE derivata
+// da sunPos stesso (normalizzato, vedi applyTimeOfDayPreset/
+// updateTimeOfDayTransition) — un solo numero controlla sia l'ombra sia il
+// cielo, allineamento garantito per costruzione, non più per taratura a
+// mano. Non c'è più bisogno di tenerli disaccoppiati nemmeno per NIGHT:
+// da quando NIGHT non usa più lo Sky procedurale (vedi NIGHT_FLAT_BG più
+// sopra), sunPos può restare "alto" come DAY (serve solo una direzione
+// d'ombra coerente, l'intensità bassa fa il resto) senza che lo Sky
+// (nascosto in quel preset) ne risenta.
 // NIGHT alzata rispetto al primo tentativo (hemi 0.35→0.6, sun 0.2→0.5):
 // troppo scuro, quasi nero — resta comunque la più buia delle 4, ma con
 // una luce blu lunare chiaramente presente, non pressoché assente
 const TIME_OF_DAY_PRESETS = {
-  [TimeOfDay.SUNRISE]: { hemiSky: 0xffb08a, hemiGround: 0x9a5a40, hemiIntensity: 0.9, sunColor: 0xffae5c, sunIntensity: 1.0, sunPos: [1500, 400, -800], skyElevation: 6, skyAzimuth: 220, skyTurbidity: 8, skyRayleigh: 2.5, skyMie: 0.01, skyMieG: 0.9 },
-  [TimeOfDay.DAY]:     { hemiSky: 0xffd0c8, hemiGround: 0xc09080, hemiIntensity: 1.2, sunColor: 0xfff5ee, sunIntensity: 1.2, sunPos: [1500, 1200, -800], skyElevation: 60, skyAzimuth: 220, skyTurbidity: 3, skyRayleigh: 1.2, skyMie: 0.003, skyMieG: 0.8 },
-  [TimeOfDay.SUNSET]:  { hemiSky: 0xff8a5c, hemiGround: 0x7a3a2a, hemiIntensity: 0.85, sunColor: 0xff7040, sunIntensity: 0.9, sunPos: [-1500, 400, 800], skyElevation: 4, skyAzimuth: 40, skyTurbidity: 8, skyRayleigh: 3, skyMie: 0.012, skyMieG: 0.92 },
-  [TimeOfDay.NIGHT]:   { hemiSky: 0x3a4a7c, hemiGround: 0x10101c, hemiIntensity: 0.6, sunColor: 0x6a8fd0, sunIntensity: 0.5, sunPos: [1500, 1200, -800], skyElevation: -8, skyAzimuth: 220, skyTurbidity: 4, skyRayleigh: 0.5, skyMie: 0.005, skyMieG: 0.8 },
+  [TimeOfDay.SUNRISE]: { hemiSky: 0xffb08a, hemiGround: 0x9a5a40, hemiIntensity: 0.9, sunColor: 0xffae5c, sunIntensity: 1.0, sunPos: [1500, 400, -800], skyTurbidity: 8, skyRayleigh: 2.5, skyMie: 0.01, skyMieG: 0.9 },
+  [TimeOfDay.DAY]:     { hemiSky: 0xffd0c8, hemiGround: 0xc09080, hemiIntensity: 1.2, sunColor: 0xfff5ee, sunIntensity: 1.2, sunPos: [1500, 1200, -800], skyTurbidity: 3, skyRayleigh: 1.2, skyMie: 0.003, skyMieG: 0.8 },
+  [TimeOfDay.SUNSET]:  { hemiSky: 0xff8a5c, hemiGround: 0x7a3a2a, hemiIntensity: 0.85, sunColor: 0xff7040, sunIntensity: 0.9, sunPos: [-1500, 300, 800], skyTurbidity: 14, skyRayleigh: 4.5, skyMie: 0.02, skyMieG: 0.95 },
+  [TimeOfDay.NIGHT]:   { hemiSky: 0x3a4a7c, hemiGround: 0x10101c, hemiIntensity: 0.6, sunColor: 0x6a8fd0, sunIntensity: 0.5, sunPos: [1500, 1200, -800], skyTurbidity: 4, skyRayleigh: 0.5, skyMie: 0.005, skyMieG: 0.8 },
 }
 
 // stato della transizione animata (stile isometric_racer: rampa/crossfade
@@ -168,10 +175,9 @@ const timeOfDayTransition = {
   active: false, elapsed: 0, toTime: TimeOfDay.SUNRISE,
   fromHemiSky: new THREE.Color(), fromHemiGround: new THREE.Color(), fromHemiIntensity: 0,
   fromSunColor: new THREE.Color(), fromSunIntensity: 0, fromSunPos: new THREE.Vector3(),
-  fromSkySunDir: new THREE.Vector3(), fromSkyTurbidity: 0, fromSkyRayleigh: 0, fromSkyMie: 0, fromSkyMieG: 0,
+  fromSkyTurbidity: 0, fromSkyRayleigh: 0, fromSkyMie: 0, fromSkyMieG: 0,
   fromHoopSpotIntensity: 0,
 }
-const skySunDirScratch = new THREE.Vector3()
 const presetColorScratch = new THREE.Color()
 const presetSunPosScratch = new THREE.Vector3()
 
@@ -188,11 +194,18 @@ function applyTimeOfDayPreset(time) {
   sun.color.set(preset.sunColor)
   sun.intensity = preset.sunIntensity
   sun.position.set(...preset.sunPos)
-  sunDirectionFromElevAzim(preset.skyElevation, preset.skyAzimuth, sky.material.uniforms.sunPosition.value)
+  // direzione del sole nello Sky = sunPos normalizzato, MAI un
+  // elevation/azimuth a parte (vedi commento su TIME_OF_DAY_PRESETS) —
+  // stessa direzione della luce vera, allineamento garantito per costruzione
+  sky.material.uniforms.sunPosition.value.copy(sun.position).normalize()
   sky.material.uniforms.turbidity.value = preset.skyTurbidity
   sky.material.uniforms.rayleigh.value = preset.skyRayleigh
   sky.material.uniforms.mieCoefficient.value = preset.skyMie
   sky.material.uniforms.mieDirectionalG.value = preset.skyMieG
+  // NIGHT: colore piatto invece dello Sky procedurale (vedi commento su
+  // NIGHT_FLAT_BG più sopra)
+  sky.visible = time !== TimeOfDay.NIGHT
+  scene.background = time === TimeOfDay.NIGHT ? new THREE.Color(NIGHT_FLAT_BG) : null
   // faretti canestro: accesi solo a SUNSET/NIGHT, di giorno la luce
   // naturale basta (asta e corpo del faretto restano visibili comunque)
   // MAI .visible = false: una luce con ombre che torna visibile per la
@@ -202,7 +215,7 @@ function applyTimeOfDayPreset(time) {
   // sempre "attiva" nella pipeline (shadow map/shader già pronti dal primo
   // frame), a 0 semplicemente non illumina nulla, zero costo di setup
   const spotsOn = time === TimeOfDay.SUNSET || time === TimeOfDay.NIGHT
-  hoopSpotlights.forEach(spot => { spot.intensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0 })
+  for (let i = 0; i < hoopSpotlights.length; i++) hoopSpotlights[i].intensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0
 }
 
 // avvia il cambio ANIMATO (Main Menu → schermata TIME OF DAY): l'istantanea
@@ -212,6 +225,12 @@ function applyTimeOfDayPreset(time) {
 // principio già usato altrove nel progetto per non assumere uno stato mai
 // verificato, vedi CLAUDE.md → stealState.contactMade)
 function startTimeOfDayTransition(time) {
+  // riabilita lo Sky per la durata del fade, qualunque sia il punto di
+  // partenza/arrivo — se si stava a riposo su NIGHT (Sky nascosto, colore
+  // piatto) il fade deve comunque animare attraverso lo Sky vero, non un
+  // colore piatto che non sa interpolare verso i parametri del cielo
+  sky.visible = true
+  scene.background = null
   const t = timeOfDayTransition
   t.fromHemiSky.copy(hemi.color)
   t.fromHemiGround.copy(hemi.groundColor)
@@ -219,7 +238,6 @@ function startTimeOfDayTransition(time) {
   t.fromSunColor.copy(sun.color)
   t.fromSunIntensity = sun.intensity
   t.fromSunPos.copy(sun.position)
-  t.fromSkySunDir.copy(sky.material.uniforms.sunPosition.value)
   t.fromSkyTurbidity = sky.material.uniforms.turbidity.value
   t.fromSkyRayleigh = sky.material.uniforms.rayleigh.value
   t.fromSkyMie = sky.material.uniforms.mieCoefficient.value
@@ -247,9 +265,11 @@ function updateTimeOfDayTransition(delta) {
   sun.color.lerpColors(t.fromSunColor, presetColorScratch.set(preset.sunColor), e)
   sun.intensity = THREE.MathUtils.lerp(t.fromSunIntensity, preset.sunIntensity, e)
   sun.position.lerpVectors(t.fromSunPos, presetSunPosScratch.set(...preset.sunPos), e)
-
-  sunDirectionFromElevAzim(preset.skyElevation, preset.skyAzimuth, skySunDirScratch)
-  sky.material.uniforms.sunPosition.value.lerpVectors(t.fromSkySunDir, skySunDirScratch, e).normalize()
+  // direzione del sole nello Sky derivata dalla stessa sun.position appena
+  // interpolata sopra, non da un lerp separato — un solo valore in
+  // movimento, mai due interpolazioni indipendenti che potrebbero
+  // disallinearsi a metà fade
+  sky.material.uniforms.sunPosition.value.copy(sun.position).normalize()
   sky.material.uniforms.turbidity.value = THREE.MathUtils.lerp(t.fromSkyTurbidity, preset.skyTurbidity, e)
   sky.material.uniforms.rayleigh.value = THREE.MathUtils.lerp(t.fromSkyRayleigh, preset.skyRayleigh, e)
   sky.material.uniforms.mieCoefficient.value = THREE.MathUtils.lerp(t.fromSkyMie, preset.skyMie, e)
@@ -261,9 +281,18 @@ function updateTimeOfDayTransition(delta) {
   const spotsOn = t.toTime === TimeOfDay.SUNSET || t.toTime === TimeOfDay.NIGHT
   const targetHoopIntensity = spotsOn ? HOOP_SPOTLIGHT_INTENSITY : 0
   const hoopIntensity = THREE.MathUtils.lerp(t.fromHoopSpotIntensity, targetHoopIntensity, e)
-  hoopSpotlights.forEach(spot => { spot.intensity = hoopIntensity })
+  for (let i = 0; i < hoopSpotlights.length; i++) hoopSpotlights[i].intensity = hoopIntensity
 
-  if (linearT >= 1) t.active = false
+  if (linearT >= 1) {
+    t.active = false
+    // fade completato: se la destinazione è NIGHT, scambia allo Sky piatto
+    // (vedi NIGHT_FLAT_BG) — fino a qui lo Sky procedurale è rimasto
+    // visibile e animato per tutto il fade, lo scambio scatta solo ora
+    if (t.toTime === TimeOfDay.NIGHT) {
+      sky.visible = false
+      scene.background = new THREE.Color(NIGHT_FLAT_BG)
+    }
+  }
 }
 
 // Lampioni: 4 punti luce alle posizioni dei globi del modello GLTF
@@ -278,7 +307,8 @@ const lampPositions = [
   [-615.87, 268, -845],
   [-615.87, 268, 845],
 ]
-lampPositions.forEach(([x, y, z]) => {
+for (let lampIndex = 0; lampIndex < lampPositions.length; lampIndex++) {
+  const [x, y, z] = lampPositions[lampIndex]
   // PointLight.intensity è in candela con decay=2 (inverso-quadratico,
   // fisicamente corretto da three.js r155+). Alla distanza reale
   // lampione→terreno in questa scena (~200-270 unità) E = intensity/d²:
@@ -308,7 +338,7 @@ lampPositions.forEach(([x, y, z]) => {
   lamp.shadow.bias = -0.0005
   lamp.shadow.normalBias = 2
   scene.add(lamp)
-})
+}
 
 // faretti sui canestri: SpotLight puntato sul ferro di ciascuno (stesse
 // coordinate XZ di hoops/backboardBoxes più sotto, ripetute qui come
@@ -352,7 +382,8 @@ const hoopPoleMeshes = []
 // accesi solo a SUNSET/NIGHT (vedi applyTimeOfDayPreset) — di giorno la
 // luce naturale basta, asta e corpo del faretto restano comunque sempre visibili
 const hoopSpotlights = []
-HOOP_SPOTLIGHT_POSITIONS.forEach(({ x, z }) => {
+for (let hoopIndex = 0; hoopIndex < HOOP_SPOTLIGHT_POSITIONS.length; hoopIndex++) {
+  const { x, z } = HOOP_SPOTLIGHT_POSITIONS[hoopIndex]
   // asta a L: segmento verticale dietro la backboard (lontano dal centro
   // campo — il segno di x decide da che lato siamo) + un braccio
   // orizzontale che si allunga fin sopra al ferro, dove il faretto punta
@@ -400,7 +431,7 @@ HOOP_SPOTLIGHT_POSITIONS.forEach(({ x, z }) => {
   fixture.position.set(x, HOOP_SPOTLIGHT_Y, z)
   fixture.castShadow = false // sta esattamente sulla luce stessa, si autoproietterebbe addosso
   scene.add(fixture)
-})
+}
 // SUNRISE di default all'avvio (imposta luci+Sky sul preset iniziale,
 // stesso valore di default di menuState.timeOfDay più sotto — il campo
 // da GAMEMODE in poi, il court vuoto e "all'alba" prima ancora di scegliere
@@ -565,7 +596,9 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
   // asta+braccio dei faretti canestro: create prima con un materiale
   // placeholder (sharedWoodMaterial non esisteva ancora, si popola durante
   // il traverse appena fatto), ora riassegnate al vero legno condiviso
-  if (sharedWoodMaterial) hoopPoleMeshes.forEach(mesh => { mesh.material = sharedWoodMaterial })
+  if (sharedWoodMaterial) {
+    for (let i = 0; i < hoopPoleMeshes.length; i++) hoopPoleMeshes[i].material = sharedWoodMaterial
+  }
   // COURT_BOUNDS: solo ORA (dopo scene.add) la matrice mondo della mesh
   // delle linee è definitiva — un Box3 preso prima (durante il traverse,
   // gltf.scene non ancora agganciato alla scena) rischierebbe coordinate
@@ -751,11 +784,10 @@ const playerRobots = buildRobotInstances(Team.A, -300)
 // colori personalizzati (Main Menu → ROBOT → "Personalizza", solo Team.A):
 // applicati a TUTTE E 3 le istanze, non solo quella attiva ora — è
 // un'identità di SQUADRA, non della singola classe, quindi deve restare
-// coerente anche cambiando robot in seguito dallo stesso menu
-const savedAllyColors = getSavedAllyColors()
-if (savedAllyColors) {
-  for (const key of Object.keys(playerRobots)) playerRobots[key].controls.setColors(savedAllyColors)
-}
+// coerente anche cambiando robot in seguito dallo stesso menu. Vive solo
+// in memoria per la sessione corrente (niente sessionStorage/RobotColors.js
+// — rimosso: un F5 fa ripartire dai colori di fabbrica, voluto)
+let currentAllyColors = null
 // --- Nemico (1v1, Section 3): stessa scelta classe del giocatore, propria
 // e indipendente — guidato dall'AI invece che dall'input. Spawn a una
 // distanza ragionevole dal giocatore, non sovrapposto: la posizione vera
@@ -779,8 +811,8 @@ loadingLabelEl.textContent = 'LOADING ENVIRONMENT ASSETS'
 // "resettare" questo stato — nessuno lo farebbe comunque per lei
 for (const key of Object.keys(enemyRobots)) enemyRobots[key].setState(RobotState.NO_BALL)
 
-let manipulator = playerRobots[getSelectedRobotKey()]
-let enemyManipulator = enemyRobots[getSelectedEnemyRobotKey()]
+let manipulator = playerRobots[ROBOT_KEYS.MANIPULATOR]
+let enemyManipulator = enemyRobots[ROBOT_KEYS.MANIPULATOR]
 
 // --- Spectator Camera ---
 const controls = new PointerLockControls(camera, renderer.domElement)
@@ -981,7 +1013,7 @@ function refreshSpecialMoveHud() {
   SPECIAL_MOVE_MAX_CHARGES = USES_DASH_STATE ? DASH_MAX_CHARGES : manipulator.specialMoveMaxCharges
   SPECIAL_MOVE_COOLDOWN_TIME = USES_DASH_STATE ? DASH_COOLDOWN_TIME : manipulator.specialMoveCooldownTime
   document.getElementById('dash-panel-label').textContent = SPECIAL_MOVE_LABEL_BY_TYPE[manipulator.type] ?? 'SPECIAL'
-  dashChargeBlockEls.forEach((el, i) => el.classList.toggle('hidden', i >= SPECIAL_MOVE_MAX_CHARGES))
+  for (let i = 0; i < dashChargeBlockEls.length; i++) dashChargeBlockEls[i].classList.toggle('hidden', i >= SPECIAL_MOVE_MAX_CHARGES)
 }
 refreshSpecialMoveHud()
 
@@ -999,7 +1031,6 @@ function setActiveRobotClass(key) {
   manipulator.root.visible = false
   manipulator = playerRobots[key]
   manipulator.root.visible = wasVisible
-  setSelectedRobotKey(key)
   refreshSpecialMoveHud()
 }
 function setActiveEnemyRobotClass(key) {
@@ -1008,7 +1039,6 @@ function setActiveEnemyRobotClass(key) {
   enemyManipulator.root.visible = false
   enemyManipulator = enemyRobots[key]
   enemyManipulator.root.visible = wasVisible
-  setSelectedEnemyRobotKey(key)
 }
 
 document.addEventListener('keydown', e => {
@@ -2098,13 +2128,10 @@ function renderRobotCardPreview(targetElementId, activeFlagKey, RobotClass = AMR
   // colore in partita)
   const previewRobot = new RobotClass(team)
   previewRobot.controls.manipulatorScale(scale)
-  // Team.A: riflette l'eventuale personalizzazione già salvata, non il
-  // default di fabbrica — stesso principio già usato per la preview
-  // zoomata (initRobotZoomModal)
-  if (team === Team.A) {
-    const saved = getSavedAllyColors()
-    if (saved) previewRobot.controls.setColors(saved)
-  }
+  // Team.A: riflette l'eventuale personalizzazione già fatta in questa
+  // sessione, non il default di fabbrica — stesso principio già usato per
+  // la preview zoomata (initRobotZoomModal)
+  if (team === Team.A && currentAllyColors) previewRobot.controls.setColors(currentAllyColors)
   previewScene.add(previewRobot.root)
 
   // pallone della preview: una sfera semplice (colore arancione da
@@ -2184,12 +2211,13 @@ function disposeRobotPreviewRoot(root) {
     if (!child.isMesh) return
     child.geometry.dispose()
     const materials = Array.isArray(child.material) ? child.material : [child.material]
-    materials.forEach(m => {
+    for (let i = 0; i < materials.length; i++) {
+      const m = materials[i]
       for (const mapKey of ['map', 'normalMap', 'roughnessMap', 'metalnessMap']) {
         if (m[mapKey]) m[mapKey].dispose()
       }
       m.dispose()
-    })
+    }
   })
 }
 
@@ -2260,13 +2288,12 @@ function initRobotZoomModal() {
     zoomRobot.controls.setColors(colors)
     if (!currentCustomizeKey) return
     // colori di SQUADRA, non della singola classe — applicati a tutte e 3
-    // le istanze (partita vera + miniatura card) allo stesso modo di
-    // getSavedAllyColors all'avvio
+    // le istanze (partita vera + miniatura card)
     for (const key of Object.keys(playerRobots)) {
       playerRobots[key].controls.setColors(colors)
       cardPreviewByKey[key]?.setColors(colors)
     }
-    saveAllyColors(colors)
+    currentAllyColors = colors
   }
   function applyCustomColorsFromInputs() {
     applyColorsEverywhere({ accent: colorInputs.accent.value, arm: colorInputs.arm.value, body: colorInputs.body.value })
@@ -2274,10 +2301,10 @@ function initRobotZoomModal() {
   Object.values(colorInputs).forEach(input => input.addEventListener('input', applyCustomColorsFromInputs))
   document.getElementById('zoom-color-reset').addEventListener('click', () => {
     if (!currentCustomizeKey) return
-    // stringhe CSS (#rrggbb), non i numeri esadecimali delle costanti — la
-    // persistenza (saveAllyColors) e getColors()/hexToCss si aspettano
-    // sempre lo stesso formato del flusso normale (colorInputs.value),
-    // altrimenti sessionStorage finiva con un formato diverso dopo un reset
+    // stringhe CSS (#rrggbb), non i numeri esadecimali delle costanti —
+    // getColors()/hexToCss si aspettano sempre lo stesso formato del
+    // flusso normale (colorInputs.value), altrimenti currentAllyColors
+    // finiva con un formato diverso dopo un reset
     colorInputs.accent.value = hexToCss(DEFAULT_ACCENT)
     colorInputs.arm.value = hexToCss(DEFAULT_ARM)
     colorInputs.body.value = hexToCss(DEFAULT_BODY_BY_KEY[currentCustomizeKey])
@@ -2295,11 +2322,9 @@ function initRobotZoomModal() {
     zoomRobot = new RobotClass(team)
     zoomRobot.controls.manipulatorScale(scale)
     // Team.A: la preview deve riflettere l'eventuale personalizzazione già
-    // salvata, non ripartire dal default di fabbrica ogni volta che si apre
-    if (team === Team.A) {
-      const saved = getSavedAllyColors()
-      if (saved) zoomRobot.controls.setColors(saved)
-    }
+    // fatta in questa sessione, non ripartire dal default di fabbrica ogni
+    // volta che si apre
+    if (team === Team.A && currentAllyColors) zoomRobot.controls.setColors(currentAllyColors)
     zoomScene.add(zoomRobot.root)
     zoomDribbleState = createDribbleState()
     // marginFactor un po' più largo (0.95, prima 0.72) — "più grande E

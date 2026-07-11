@@ -1,40 +1,31 @@
 import * as THREE from 'three'
 
-// Wrapper OOP sopra AudioListener e i suoni sintetizzati via Web Audio —
-// stesso spirito di RobotBase/Basketball: un'unica API (sfx.playX()) invece
-// di funzioni globali sparse in main.js. Nessun asset esterno (mp3/wav):
-// tutto generato in codice (oscillatori + rumore bianco filtrato), coerente
-// col resto del progetto (texture procedurali, niente download).
+// OOP wrapper over AudioListener + synthesized Web Audio sounds (sfx.playX()),
+// generated in code (oscillators + filtered white noise).
 
-// Parametri di sintesi nominati (non inline dentro i metodi sotto), stesso
-// stile SCREAMING_SNAKE_CASE delle costanti SHOOT_*/DRIBBLE_* tunabili in
-// main.js — anche se qui non sono ancora esposte al pannello debug, restano
-// facili da individuare/ritarare tutte insieme invece che sparse tra i
-// parametri di createOscillator/createGain.
+const NOISE_BUFFER_DURATION = 0.3 // seconds of pre-generated white noise, reused by playBounce/playShoot
 
-const NOISE_BUFFER_DURATION = 0.3 // secondi di rumore bianco pre-generato, riusato da playBounce/playShoot
-
-// playScore: "campanello" a due note ascendenti
-const SCORE_NOTES = [880, 1320] // La5 → Mi6, salto di quinta, "ding-ding" ascendente
-const SCORE_NOTE_STAGGER = 0.1  // secondi tra l'inizio di una nota e la successiva
-const SCORE_ATTACK_TIME = 0.03  // attacco lineare 0→picco, evita il "click" di uno scatto istantaneo
+// playScore: two-note ascending "bell"
+const SCORE_NOTES = [880, 1320] // A5 → E6, a fifth apart, ascending "ding-ding"
+const SCORE_NOTE_STAGGER = 0.1  // seconds between one note's start and the next
+const SCORE_ATTACK_TIME = 0.03  // linear attack 0→peak, avoids the "click" of an instant jump
 const SCORE_PEAK_GAIN = 0.22
-const SCORE_DURATION = 0.35     // decadimento esponenziale fino a qui, poi stop
+const SCORE_DURATION = 0.35     // exponential decay down to here, then stop
 
-// playBounce: corpo grave ("bong") + transiente di contatto (rumore secco)
+// playBounce: low "bong" body + sharp contact transient
 const BOUNCE_BODY_FREQ_START = 160
 const BOUNCE_BODY_FREQ_END = 75
 const BOUNCE_BODY_SWEEP_TIME = 0.15
 const BOUNCE_BODY_ATTACK_TIME = 0.008
 const BOUNCE_BODY_PEAK_GAIN = 0.22
 const BOUNCE_BODY_DURATION = 0.18
-const BOUNCE_CONTACT_LOWPASS_FREQ = 400 // taglia il rumore bianco per un "tonfo" invece di un fischio
+const BOUNCE_CONTACT_LOWPASS_FREQ = 400 // filters the white noise into a "thud" instead of a hiss
 const BOUNCE_CONTACT_ATTACK_TIME = 0.005
 const BOUNCE_CONTACT_PEAK_GAIN = 0.12
 const BOUNCE_CONTACT_DURATION = 0.04
 
-// playSteal: rumore bianco filtrato passa-banda, centro che SCENDE (opposto
-// di playShoot) — un "swipe" secco e breve, distinto dal "whoosh" del tiro
+// playSteal: bandpass-filtered white noise, center frequency DROPS (opposite
+// of playShoot) — a short, sharp "swipe", distinct from the shot's "whoosh"
 const STEAL_FILTER_Q = 0.6
 const STEAL_FREQ_START = 1400
 const STEAL_FREQ_END = 350
@@ -43,8 +34,8 @@ const STEAL_ATTACK_TIME = 0.01
 const STEAL_PEAK_GAIN = 0.16
 const STEAL_DURATION = 0.16
 
-// playBlock: "thwack" secco e basso — un colpo deciso, distinto sia dal
-// wsh discendente di playSteal sia dal thump morbido di playBounce
+// playBlock: sharp, low "thwack" — a decisive hit, distinct from both
+// playSteal's descending swipe and playBounce's soft thump
 const BLOCK_NOISE_LOWPASS_FREQ = 900
 const BLOCK_NOISE_ATTACK_TIME = 0.004
 const BLOCK_NOISE_PEAK_GAIN = 0.2
@@ -56,8 +47,8 @@ const BLOCK_TONE_ATTACK_TIME = 0.005
 const BLOCK_TONE_PEAK_GAIN = 0.18
 const BLOCK_TONE_DURATION = 0.14
 
-// playShoot: rumore bianco filtrato passa-banda, centro che sale ("whoosh")
-const SHOOT_FILTER_Q = 0.5 // basso/banda larga: un Q alto suonava troppo "nasale"/fischiante
+// playShoot: bandpass-filtered white noise, center frequency rises ("whoosh")
+const SHOOT_FILTER_Q = 0.5 // low/wide band: a high Q sounded too "nasal"/whistly
 const SHOOT_FREQ_START = 500
 const SHOOT_FREQ_END = 1600
 const SHOOT_SWEEP_TIME = 0.18
@@ -65,41 +56,38 @@ const SHOOT_ATTACK_TIME = 0.04
 const SHOOT_PEAK_GAIN = 0.14
 const SHOOT_DURATION = 0.28
 
-export class SoundEffects {
-  constructor(camera) {
+export class SoundEffects 
+{
+  constructor(camera) 
+  {
     this.listener = new THREE.AudioListener()
-    camera.add(this.listener)
-    // rumore bianco generato una volta sola (buffer condiviso, riusato dai
-    // suoni sotto per i loro transienti/whoosh — rigenerarlo ad ogni play
-    // sarebbe puro spreco, il contenuto è statico)
-    this.noiseBuffer = this._createNoiseBuffer(NOISE_BUFFER_DURATION)
+    camera.add(this.listener) //Lock onto the camera (an obj is required i guess???)
+    this.noiseBuffer = this._createNoiseBuffer(NOISE_BUFFER_DURATION)    // white noise generated once (shared buffer) used after
   }
 
-  _createNoiseBuffer(duration) {
-    const ctx = this.listener.context
-    const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate)
-    const data = buffer.getChannelData(0)
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+  _createNoiseBuffer(duration) 
+  {
+    const ctx = this.listener.context                                               // Web Audio API context, shared by all THREE.Audio objects
+    const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate)   // 1 channel, length = sampleRate * duration, sampleRate = ctx.sampleRate
+    const data = buffer.getChannelData(0)                                           // get the buffer's data array (Float32Array) for channel 0
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1           // fill with random values in [-1, 1] (white noise)
     return buffer
   }
 
-  // inviluppo condiviso dai 4 gain node sotto (score, bounce body, bounce
-  // contact, shoot): silenzio → attacco lineare (evita il "click" di un
-  // salto istantaneo da 0 al picco) → decadimento esponenziale fino quasi a
-  // zero (0.001, mai 0 esatto: exponentialRampToValueAtTime non accetta 0)
-  _applyEnvelope(gainNode, startTime, peakGain, attackTime, duration) {
+  // Apply a simple linear attack + exponential decay envelope to a GainNode
+  _applyEnvelope(gainNode, startTime, peakGain, attackTime, duration) 
+  {
     gainNode.gain.setValueAtTime(0, startTime)
     gainNode.gain.linearRampToValueAtTime(peakGain, startTime + attackTime)
     gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
   }
 
-  // piccolo "campanello" a due note ascendenti: due oscillatori sinusoidali
-  // in sequenza, stesso spirito "generato in codice" delle texture PBR del
-  // robot. Piccolo attacco lineare (evita il "click" di un salto istantaneo
-  // da 0 al picco) usato anche dagli altri due suoni sotto
+  // Two-note ascending "bell" for scoring (A5 → E6, a fifth apart)
   playScore() {
     const ctx = this.listener.context
-    SCORE_NOTES.forEach((freq, i) => {
+    for (let i = 0; i < SCORE_NOTES.length; i++) 
+    {
+      const freq = SCORE_NOTES[i]
       const startTime = ctx.currentTime + i * SCORE_NOTE_STAGGER
       const oscillator = ctx.createOscillator()
       const gain = ctx.createGain()
@@ -110,18 +98,10 @@ export class SoundEffects {
       gain.connect(this.listener.getInput())
       oscillator.start(startTime)
       oscillator.stop(startTime + SCORE_DURATION)
-    })
+    }
   }
 
-  // "thump" sordo — ogni rimbalzo (palleggio automatico E collisioni del
-  // volo di tiro con backboard/ferro/muri/pali/panchine/pavimento). Un vero
-  // rimbalzo ha sia un corpo grave (il "bong" della palla) sia un breve
-  // transiente di contatto (il rumore secco dell'urto) — un sine puro da
-  // solo suonava troppo "elettronico", pulito ma innaturale.
-  // volumeScale: il palleggio automatico non si ferma MAI, quindi rimbalza
-  // in loop continuo — lo stesso thump a piena intensità ad ogni ciclo
-  // diventava fastidioso in fretta. Le collisioni vere del tiro (più rare,
-  // più significative) restano a piena intensità (default 1)
+ // Low "bong" body + sharp contact transient for a ball bounce (or similar)
   playBounce(volumeScale = 1) {
     const ctx = this.listener.context
     const t = ctx.currentTime
@@ -136,8 +116,8 @@ export class SoundEffects {
     body.start(t)
     body.stop(t + BOUNCE_BODY_DURATION)
 
-    // transiente di contatto: rumore passa-basso, brevissimo, sotto il
-    // corpo grave — dà "peso" senza risultare fischiante/duro
+    // contact transient: lowpass noise, very short, under the low body —
+    // adds "weight" without sounding whistly/harsh
     const contact = ctx.createBufferSource()
     contact.buffer = this.noiseBuffer
     const contactFilter = ctx.createBiquadFilter()
@@ -152,12 +132,7 @@ export class SoundEffects {
     contact.stop(t + BOUNCE_CONTACT_DURATION)
   }
 
-  // Rumore bianco filtrato passa-banda con un centro-frequenza che scivola
-  // (sweep) da un valore all'altro — playShoot ("whoosh" ascendente) e
-  // playSteal ("swipe" discendente, molto più breve) erano la STESSA
-  // tecnica ripetuta due volte, differivano solo nei numeri: consolidata
-  // qui, un solo posto in cui aggiungere un terzo suono con questa stessa
-  // forma in futuro
+  // Bandpass-filtered white noise sweep, used for playShoot and playSteal
   _playBandpassNoiseSweep({ q, freqStart, freqEnd, sweepTime, peakGain, attackTime, duration }) {
     const ctx = this.listener.context
     const t = ctx.currentTime
@@ -177,8 +152,8 @@ export class SoundEffects {
     noise.stop(t + duration)
   }
 
-  // "whoosh": centro-frequenza che SALE. Q basso (banda larga): un Q alto
-  // suonava troppo "nasale"/fischiante invece che un soffio morbido
+  // "whoosh": center frequency RISES. Low Q (wide band): a high Q sounded
+  // too "nasal"/whistly instead of a soft breath
   playShoot() {
     this._playBandpassNoiseSweep({
       q: SHOOT_FILTER_Q, freqStart: SHOOT_FREQ_START, freqEnd: SHOOT_FREQ_END,
@@ -186,8 +161,8 @@ export class SoundEffects {
     })
   }
 
-  // "swipe" secco per uno STEAL riuscito: centro-frequenza che SCENDE
-  // (opposto di playShoot) e molto più breve, per non confonderlo col whoosh
+  // sharp "swipe" for a successful STEAL: center frequency DROPS (opposite
+  // of playShoot) and much shorter, so it's not confused with the whoosh
   playSteal() {
     this._playBandpassNoiseSweep({
       q: STEAL_FILTER_Q, freqStart: STEAL_FREQ_START, freqEnd: STEAL_FREQ_END,
@@ -195,10 +170,7 @@ export class SoundEffects {
     })
   }
 
-  // "thwack" secco e basso per un BLOCK riuscito: rumore passa-basso
-  // (il colpo secco) + un tono grave discendente sotto (il "peso" della
-  // deviazione) — stessa idea di playBounce (corpo+contatto) ma più
-  // corto e deciso, per leggersi come un vero swat e non un rimbalzo
+  // Sharp
   playBlock() {
     const ctx = this.listener.context
     const t = ctx.currentTime

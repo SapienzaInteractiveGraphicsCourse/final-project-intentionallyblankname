@@ -1,5 +1,4 @@
-import { GameMode } from '../state/GameMode.js'
-import { TimeOfDay } from '../state/TimeOfDay.js'
+import { GameMode, TimeOfDay } from '../SharedEnums.js'
 import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from '../gameplay/Basketball.js'
 
