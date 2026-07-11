@@ -7,11 +7,10 @@ import { lerpAngle } from '../utils/mathUtils.js'
 export const DRONE_STATS = { speed: 5, shooting: 2, steal: 1, block: 1 }
 
 // All tunable Drone numbers (locomotion/bank + Flight) in one mutable
-// object, same reasoning as dribbleTuning/shootTuning elsewhere — exposed
-// as debug panel sliders (P → Drone Animation)
+// object, same reasoning as dribbleTuning/shootTuning elsewhere
 export const droneTuning = {}
-droneTuning.rotorSpinSpeed = 24 // rad/s, spins even standing still
-droneTuning.bankGain = 0.15 // bank per yaw rate
+droneTuning.rotorSpinSpeed = 24   // rad/s, spins even standing still
+droneTuning.bankGain = 0.15       // bank per yaw rate
 droneTuning.bankMax = 0.35
 droneTuning.bankSmoothSpeed = 8
 
@@ -39,22 +38,24 @@ droneTuning.flightGrabDuration = 0.15
 droneTuning.flightGrabTarget = 0.5
 droneTuning.flightBallRestOffset = 0.1
 
-export class Drone extends RobotBase {
-  constructor(team) {
+export class Drone extends RobotBase 
+{
+  constructor(team) 
+  {
     super({ factory: DroneModelMaker, stats: DRONE_STATS, type: 'DRONE', team })
     this._bank = 0
     this._aimBodyTilt = 0
     this._thrustTilt = 0
     this._prevPosForThrustTilt = this.root.position.clone()
-    // Paddle is flipped (armFlip) — verified via headless sweep (-12/0/12/25/40)
+
+    // Paddle is flipped (armFlip)
     // that +12 is the value that rests the ball cleanly without overlap
     this.ballOffsetDown = 12
-    // Confirmed via a real bounding-box overlap test with a tight grip
     this.ballRestExtraOffset = 0.15
-    // Verified via headless dribble sim: the flipped/hanging arm translates
-    // the same angular amplitude into less vertical paddle travel than AMR
-    // (~42 vs ~57 units), so bounce needs scaling down to stay in sync
+
+    //  bounce needs scaling down to stay in sync
     this.dribbleTuning.bounceSpeedScale = 0.88
+
     // RobotBase's shootTuning is tuned for the arm hanging below the body
     // (correct while isElevated/Flight). On the ground the same motion would
     // intersect the body, so elevatedShootTuning keeps the Flight-good pose
@@ -71,14 +72,14 @@ export class Drone extends RobotBase {
   }
 
   // Doesn't walk: rotors always spin, body banks into turns instead of the rigid pivot RobotBase inherits by default
-  updateLocomotionAnimation(targetYaw, delta, turnSpeed) {
+  updateLocomotionAnimation(targetYaw, delta, turnSpeed) // OVERRIDING CAUSE DRONE IS DIFFERENT
+  {
     const prevYaw = this.locomotionYaw
-    // NOT super.updateLocomotionAnimation(): it writes wheelsGroup.rotation.y
-    // directly, bypassing controls.setWheelsYaw — DroneModelMaker's internal
-    // yawAngle would stay stuck at 0 and get overwritten by setBank/setBodyPitch
+
     // (real bug: drone looked "turned sideways" while moving). Same lerp formula, routed through setWheelsYaw instead.
     this.locomotionYaw = lerpAngle(this.locomotionYaw, targetYaw, 1 - Math.exp(-turnSpeed * delta))
     this.controls.setWheelsYaw(this.locomotionYaw)
+
     const yawRate = delta > 0 ? (this.locomotionYaw - prevYaw) / delta : 0
     const bankTarget = THREE.MathUtils.clamp(-yawRate * droneTuning.bankGain, -droneTuning.bankMax, droneTuning.bankMax)
     this._bank += (bankTarget - this._bank) * (1 - Math.exp(-droneTuning.bankSmoothSpeed * delta))
@@ -123,7 +124,7 @@ export class Drone extends RobotBase {
     // doesn't leave it behind — just the visual gesture, not a real HANDLING state
     this.specialMoveState.phase = 'grab'
     this.specialMoveState.phaseT = 0
-    // ballRestExtraOffset swap NOT done here (real bug, found headless): doing
+    // ballRestExtraOffset swap NOT done here (real bug): doing
     // it at t=0 while grip is still 0 made ballRestPoint jump away from the
     // ball instantly. Eased in onSpecialMoveUpdate instead, synced to the same t as the grip.
   }
