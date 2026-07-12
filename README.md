@@ -7,6 +7,8 @@
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/docs/Web/JavaScript)
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-brightgreen?style=flat-square&logo=github)](https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/)
 
+
+Alessandro Carotenuto, 1847282
 ---
 
 ## Demo
