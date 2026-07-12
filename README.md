@@ -1,32 +1,46 @@
 # Mecha-Basketball 3D
 
-**Final Project — Interactive Graphics** · Prof. Marco Schaerf · La Sapienza University of Rome
+**Final Project · Interactive Graphics** · Prof. Marco Schaerf · La Sapienza University of Rome
 
 [![Three.js](https://img.shields.io/badge/Three.js-e8c205?style=flat-square&logo=three.js&logoColor=black)](https://threejs.org/)
 [![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/docs/Web/JavaScript)
-[![Status](https://img.shields.io/badge/Status-In%20Progress-orange?style=flat-square)]()
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Not%20Deployed%20Yet-lightgrey?style=flat-square&logo=github)](#)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-brightgreen?style=flat-square&logo=github)](https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/)
+
+---
+
+## Demo
+
+### [**CLICK HERE TO PLAY**](https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/)
+
+Runs entirely in the browser, no installation required.
+
+For a smoother experience (or for development), you can also run it locally:
+
+```bash
+git clone https://github.com/SapienzaInteractiveGraphicsCourse/final-project-intentionallyblankname.git
+cd final-project-intentionallyblankname
+npm install
+npm run dev      # → localhost:5173
+```
 
 ---
 
 ## About
 
-Partita di basket simulata tra robot procedurali selezionabili, ambientata in un campo da basket GLTF sotto un cielo procedurale dinamico. Nessun modello esterno per i robot: sono costruiti in Three.js con primitive e gerarchie di `THREE.Group`, animate interamente via codice. L'utente sceglie una classe di robot da una schermata di selezione, ognuna con stat e mossa speciale diverse, e una fase del giorno (Sunrise/Day/Sunset/Night, con transizione animata tra luci e skybox), poi osserva/dirige la simulazione della partita.
+A simulated basketball match between selectable procedural robots, set in a GLTF basketball court under a dynamic procedural sky. No external models are used for the robots: they are built in Three.js using primitives and `THREE.Group` hierarchies, animated entirely via code. The user selects a robot class from a selection screen—each with different stats and special moves—and a time of day (Sunrise/Day/Sunset/Night, with an animated transition between lights and skyboxes), then observes or directs the match simulation.
 
 ---
 
 ## Robot Classes
 
-Roster corretto — sostituisce il concept iniziale COLOSSUS/GLITCH/SENTINEL (mai implementato):
+| Class | Locomotion | Special Move |
+|---|---|---|
+| **MOBILE MANIPULATOR** | Wheels | Dash |
+| **LEGGED MANIPULATOR** | Legs (gait cycle) | Jump |
+| **DRONE** | Flight | Flight |
 
-| Classe | Locomozione | Mossa Speciale | Stato |
-|---|---|---|---|
-| **MOBILE MANIPULATOR** | Ruote | Dash | ✅ Implementata, giocabile |
-| **LEGGED MANIPULATOR** | Gambe (ciclo del passo) | Jump | ✅ Implementata, giocabile |
-| **DRONE** | Volo | Flight | ✅ Implementata, giocabile |
-
-Tutte e 3 le classi sono selezionabili dal Main Menu — sia per il giocatore sia, in 1v1, per l'avversario controllato dall'AI — senza reload di pagina.
+Selectable from the Main Menu for both the player and, in 1v1 mode, the AI-controlled opponent, without requiring a page reload.
 
 ---
 
@@ -34,21 +48,21 @@ Tutte e 3 le classi sono selezionabili dal Main Menu — sia per il giocatore si
 
 <table width="100%">
 <colgroup><col width="30%"><col width="70%"></colgroup>
-<thead><tr><th>Input</th><th>Effetto</th></tr></thead>
+<thead><tr><th>Input</th><th>Effect</th></tr></thead>
 <tbody>
-<tr><td><b>P</b></td><td>Apre/chiude pannello DEBUG (tuning parametrico del robot componente per componente + Copy Config) e pannello CAMERA</td></tr>
-<tr><td><b>M</b></td><td>Alterna modalità <b>Spectate</b> (free-fly) / <b>Play</b> (terza persona sul robot)</td></tr>
-<tr><td>Spectate: click + mouse + WASD + Space/Shift</td><td>Volo libero nella direzione esatta della camera</td></tr>
-<tr><td>Play: click + mouse</td><td>Orbita la camera attorno al robot; il pitch alza/abbassa leggermente il braccio</td></tr>
-<tr><td>Play: WASD</td><td>Muove il robot relativo a dove guarda la camera; le ruote sterzano verso la direzione di marcia, il braccio punta sempre dove guarda la camera</td></tr>
-<tr><td>Play: Shift sinistro</td><td>Mossa speciale della classe attiva: Dash (MOBILE MANIPULATOR, cooldown 4s), Jump (LEGGED MANIPULATOR, cooldown 5s), Flight (DRONE, cooldown 17s)</td></tr>
-<tr><td>Play: tasto destro tenuto (solo se si ha la palla)</td><td><code>RobotState.HANDLING</code> — palleggio in pausa, camera a orientamento libero per mirare; non fa nulla se la palla è libera (<code>BallState.FREE</code>)</td></tr>
-<tr><td>Play: click sinistro (in HANDLING)</td><td>Tiro — direzione dal raycast sul crosshair, forza costante (ridotta dentro l'arco dei 3 punti), animazione windup/release/recover</td></tr>
-<tr><td>Play: camminare vicino a una palla libera</td><td>Pickup automatico (nessun tasto) — appena il bounding box del robot tocca la palla, animazione di raccolta rapida e si torna a <code>DRIBBLE</code></td></tr>
-<tr><td>Play: <b>Q</b> (1v1, solo senza palla)</td><td>STEAL — sweep verso l'avversario, possesso rubato solo se il contatto avviene ed è ancora valido a fine animazione</td></tr>
-<tr><td>Play: <b>E</b> (1v1, solo senza palla)</td><td>BLOCK — allungo verso la palla in volo, devia un tiro in corso (nessun cambio di possesso)</td></tr>
-<tr><td><b>ESC</b> (in Play)</td><td>Apre il menu di pausa (freeza il gioco): OPTIONS / BACK TO GAME / BACK TO MAIN MENU (resetta il punteggio)</td></tr>
-<tr><td><b>1-8</b> (sempre attivi)</td><td>Toggle wireframe di ispezione collisioni/contatto (backboard/ferro/muri/pali/panchine/zona STEAL/raggio BLOCK/zona PICKUP)</td></tr>
+<tr><td><b>P</b></td><td>Debug Panel / Camera</td></tr>
+<tr><td><b>M</b></td><td>Spectate (free-fly) / Play (third-person)</td></tr>
+<tr><td>Spectate: mouse + WASD + Space/Shift</td><td>Free flight</td></tr>
+<tr><td>Play: mouse</td><td>Orbit camera</td></tr>
+<tr><td>Play: WASD</td><td>Camera-relative movement</td></tr>
+<tr><td>Play: Left Shift</td><td>Special move (Dash / Jump / Flight)</td></tr>
+<tr><td>Play: Right click (held)</td><td>Grab ball, free aim</td></tr>
+<tr><td>Play: Left click (while holding ball)</td><td>Shoot basket</td></tr>
+<tr><td>Play: Approach a loose ball</td><td>Automatic pickup</td></tr>
+<tr><td>Play: <b>Q</b> (1v1, without ball)</td><td>STEAL</td></tr>
+<tr><td>Play: <b>E</b> (1v1, without ball)</td><td>BLOCK</td></tr>
+<tr><td><b>ESC</b> (during Play)</td><td>Pause menu</td></tr>
+<tr><td><b>1-8</b></td><td>Collision debug wireframe</td></tr>
 </tbody>
 </table>
 
@@ -57,30 +71,22 @@ Tutte e 3 le classi sono selezionabili dal Main Menu — sia per il giocatore si
 ## Tech Stack
 
 <table width="100%">
-<thead><tr><th width="20%">Categoria</th><th>Tools</th></tr></thead>
+<thead><tr><th width="20%">Category</th><th>Tools</th></tr></thead>
 <tbody>
 <tr><td><b>Core</b></td><td><img src="https://img.shields.io/badge/Three.js-e8c205?style=flat-square&logo=three.js&logoColor=black"> <img src="https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white"> <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black"></td></tr>
 <tr><td><b>Rendering</b></td><td><img src="https://img.shields.io/badge/GLTFLoader-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/EffectComposer-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/SSAO-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/SMAA-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/Procedural%20Sky-e8c205?style=flat-square"></td></tr>
 <tr><td><b>Robot</b></td><td><img src="https://img.shields.io/badge/Procedural%20Hierarchy-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/Runtime%20Geometry%20Rebuild-e8c205?style=flat-square"></td></tr>
 <tr><td><b>Basketball</b></td><td><img src="https://img.shields.io/badge/Fixed%20Timestep%20Simulation-e8c205?style=flat-square"> <img src="https://img.shields.io/badge/State%20Machine-e8c205?style=flat-square"></td></tr>
-<tr><td><b>Deploy</b></td><td><img src="https://img.shields.io/badge/GitHub%20Pages-222222?style=flat-square&logo=github&logoColor=white"></td></tr>
+<tr><td><b>Deploy</b></td><td><a href="https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/"><img src="https://img.shields.io/badge/GitHub%20Pages-222222?style=flat-square&logo=github&logoColor=white"></a></td></tr>
 </tbody>
 </table>
 
 ---
 
-## Run Locally
-
-```bash
-npm install
-npm run dev      # → localhost:5173
-```
-
----
-
 ## Author
 
-**Alessandro Carotenuto** — MSc Artificial Intelligence & Robotics, La Sapienza University of Rome
+**Alessandro Carotenuto**, MSc Artificial Intelligence & Robotics, La Sapienza University of Rome
 
 [![Personal Website](https://img.shields.io/badge/Personal%20Website-alessandro--carotenuto.github.io-blue?style=flat-square&logo=github)](https://alessandro-carotenuto.github.io)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Alessandro%20Carotenuto-0077B5?style=flat-square&logo=linkedin)](https://www.linkedin.com/in/alessandro-carotenuto-airo)
+```
