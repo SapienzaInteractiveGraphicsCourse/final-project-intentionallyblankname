@@ -60,16 +60,16 @@ export function initDebugPanel(ctx) {
 
   // --- Shape (static sizes): one shared builder, the 3 classes expose the
   // same setter vocabulary. Only the locomotion component name differs
-  // (Wheels/Legs, Drone has neither) and whether a Disc exists. Bound to
-  // the explicit instance, not the active one
-  function buildShapeSection(parentContainer, label, robot, { locomotionLabel, locomotionSetterKey }) {
+  // (Wheels/Legs, Drone has neither) and whether a Disc exists. Nested
+  // under the class's own top-level section, so titles stay short
+  function buildShapeSection(parentContainer, robot, { locomotionLabel, locomotionSetterKey }) {
     const cfg = robot.getConfig()
-    const shape = createToggleSection(parentContainer, `${label} Shape`)
+    const shape = createToggleSection(parentContainer, 'Shape')
     createSliderControl(shape, {
-      name: `${label} Scale (overall)`, min: 1, max: 50, step: 0.5,
+      name: 'Scale (overall)', min: 1, max: 50, step: 0.5,
       value: cfg.manipulatorScale, onChange: robot.controls.manipulatorScale,
     })
-    const config = createToggleSection(shape, `${label} Config`)
+    const config = createToggleSection(shape, 'Components')
     if (locomotionSetterKey) {
       addComponentSection(config, locomotionLabel, [
         { name: 'Scale', ...SCALE_SLIDER_RANGE, value: cfg[locomotionSetterKey], onChange: robot.controls[locomotionSetterKey] },
@@ -107,10 +107,6 @@ export function initDebugPanel(ctx) {
     ])
   }
 
-  buildShapeSection(debugPanel, 'Manipulator', playerRobots.manipulator, { locomotionLabel: 'Wheels', locomotionSetterKey: 'wheelsScale' })
-  buildShapeSection(debugPanel, 'Legged', playerRobots.legged, { locomotionLabel: 'Legs', locomotionSetterKey: 'legsScale' })
-  buildShapeSection(debugPanel, 'Drone', playerRobots.drone, { locomotionLabel: null, locomotionSetterKey: null })
-
   // --- Animation: dribble/shoot/handling tuning are per-instance fields
   // (RobotBase), one section per class bound to ITS instance.
   // Shoot slider list extracted: reused for both shootTuning and the
@@ -134,8 +130,8 @@ export function initDebugPanel(ctx) {
     ]
   }
 
-  function buildAnimationSection(container, label, robot) {
-    const animation = createToggleSection(container, `${label} Animation`)
+  function buildAnimationSection(container, robot) {
+    const animation = createToggleSection(container, 'Animation')
     const { dribbleTuning, shootTuning, handlingTuning } = robot
     addComponentSection(animation, 'Dribble', [
       { name: 'Push Duration (s)', min: 0.05, max: 1, step: 0.01, value: dribbleTuning.pushDuration, onChange: v => { dribbleTuning.pushDuration = v } },
@@ -162,9 +158,61 @@ export function initDebugPanel(ctx) {
     ])
   }
 
-  buildAnimationSection(debugPanel, 'Manipulator', playerRobots.manipulator)
-  buildAnimationSection(debugPanel, 'Legged', playerRobots.legged)
-  buildAnimationSection(debugPanel, 'Drone', playerRobots.drone)
+  // Ball offset from the paddle center: each class's arm differs (LEGGED
+  // bigger, DRONE flipped), the same absolute offset does not land the
+  // same point. Nested per class instead of grouped under Basketball
+  function buildBallOffsetSection(container, robot) {
+    addComponentSection(container, 'Ball Offset (from paddle center)', [
+      { name: 'Forward', min: -40, max: 40, step: 1, value: robot.ballOffsetForward, onChange: v => { robot.ballOffsetForward = v } },
+      { name: 'Side', min: -40, max: 40, step: 1, value: robot.ballOffsetSide, onChange: v => { robot.ballOffsetSide = v } },
+      { name: 'Down', min: -40, max: 40, step: 1, value: robot.ballOffsetDown, onChange: v => { robot.ballOffsetDown = v } },
+    ])
+  }
+
+  // One top-level, collapsible group per robot class: everything about
+  // that class (shape, animation, ball offset) lives inside it, instead
+  // of the same 3 classes' shape sections all bunched together, then all
+  // animation sections, then a same-named "Drone Animation" section for
+  // unrelated flight tuning stranded far below
+  function buildClassSection(label, robot, locomotionOpts) {
+    const classSection = createToggleSection(debugPanel, label)
+    buildShapeSection(classSection, robot, locomotionOpts)
+    buildAnimationSection(classSection, robot)
+    buildBallOffsetSection(classSection, robot)
+    return classSection
+  }
+
+  buildClassSection('Manipulator', playerRobots.manipulator, { locomotionLabel: 'Wheels', locomotionSetterKey: 'wheelsScale' })
+  buildClassSection('Legged', playerRobots.legged, { locomotionLabel: 'Legs', locomotionSetterKey: 'legsScale' })
+  const droneSection = buildClassSection('Drone', playerRobots.drone, { locomotionLabel: null, locomotionSetterKey: null })
+
+  // Flight Tuning: droneTuning is module-level (one playable Drone per
+  // side), nested inside the same Drone group instead of stranded as its
+  // own top-level section with a name that collided with Drone Animation
+  const flightTuning = createToggleSection(droneSection, 'Flight Tuning')
+  addComponentSection(flightTuning, 'Bank & Rotors', [
+    { name: 'Rotor Spin Speed', min: 0, max: 60, step: 1, value: droneTuning.rotorSpinSpeed, onChange: v => { droneTuning.rotorSpinSpeed = v } },
+    { name: 'Bank Gain', min: 0, max: 1, step: 0.01, value: droneTuning.bankGain, onChange: v => { droneTuning.bankGain = v } },
+    { name: 'Bank Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.bankMax, onChange: v => { droneTuning.bankMax = v } },
+    { name: 'Bank Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.bankSmoothSpeed, onChange: v => { droneTuning.bankSmoothSpeed = v } },
+    { name: 'Aim Body Tilt Gain', min: 0, max: 2, step: 0.01, value: droneTuning.aimBodyTiltGain, onChange: v => { droneTuning.aimBodyTiltGain = v } },
+    { name: 'Aim Body Tilt Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.aimBodyTiltMax, onChange: v => { droneTuning.aimBodyTiltMax = v } },
+    { name: 'Aim Body Tilt Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.aimBodyTiltSmoothSpeed, onChange: v => { droneTuning.aimBodyTiltSmoothSpeed = v } },
+    { name: 'Thrust Tilt Gain', min: 0, max: 0.02, step: 0.0001, value: droneTuning.thrustTiltGain, onChange: v => { droneTuning.thrustTiltGain = v } },
+    { name: 'Thrust Tilt Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.thrustTiltMax, onChange: v => { droneTuning.thrustTiltMax = v } },
+    { name: 'Thrust Tilt Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.thrustTiltSmoothSpeed, onChange: v => { droneTuning.thrustTiltSmoothSpeed = v } },
+  ])
+  addComponentSection(flightTuning, 'Flight Phases', [
+    { name: 'Grab Duration (s)', min: 0.05, max: 1, step: 0.01, value: droneTuning.flightGrabDuration, onChange: v => { droneTuning.flightGrabDuration = v } },
+    { name: 'Grab Grip Target (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: droneTuning.flightGrabTarget, onChange: v => { droneTuning.flightGrabTarget = v } },
+    { name: 'Grab Ball Rest Offset', min: 0, max: 1, step: 0.01, value: droneTuning.flightBallRestOffset, onChange: v => { droneTuning.flightBallRestOffset = v } },
+    { name: 'Rise Duration (s)', min: 0.1, max: 3, step: 0.05, value: droneTuning.flightRiseDuration, onChange: v => { droneTuning.flightRiseDuration = v } },
+    { name: 'Hold Duration (s)', min: 0, max: 10, step: 0.1, value: droneTuning.flightHoldDuration, onChange: v => { droneTuning.flightHoldDuration = v } },
+    { name: 'Descend Duration (s)', min: 0.1, max: 3, step: 0.05, value: droneTuning.flightDescendDuration, onChange: v => { droneTuning.flightDescendDuration = v } },
+    { name: 'Height (world units)', min: 50, max: 800, step: 10, value: droneTuning.flightHeight, onChange: v => { droneTuning.flightHeight = v } },
+    { name: 'Speed Scale (while elevated)', min: 0, max: 1, step: 0.01, value: droneTuning.flightSpeedScale, onChange: v => { droneTuning.flightSpeedScale = v } },
+    { name: 'Cooldown (s)', min: 1, max: 30, step: 0.5, value: droneTuning.flightCooldown, onChange: v => { droneTuning.flightCooldown = v } },
+  ])
 
   // --- Camera / Aim: genuinely global (player camera/crosshair), not
   // per-class instance fields
@@ -178,50 +226,12 @@ export function initDebugPanel(ctx) {
     { name: 'Crosshair Height (px)', min: 0, max: 300, step: 5, value: getCrosshairHeight(), onChange: setCrosshairHeight },
   ])
 
-  // --- Drone Animation: droneTuning is module-level (one playable Drone
-  // per side, no need for per-instance)
-  const droneAnimation = createToggleSection(debugPanel, 'Drone Animation')
-  addComponentSection(droneAnimation, 'Flight (bank/rotors)', [
-    { name: 'Rotor Spin Speed', min: 0, max: 60, step: 1, value: droneTuning.rotorSpinSpeed, onChange: v => { droneTuning.rotorSpinSpeed = v } },
-    { name: 'Bank Gain', min: 0, max: 1, step: 0.01, value: droneTuning.bankGain, onChange: v => { droneTuning.bankGain = v } },
-    { name: 'Bank Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.bankMax, onChange: v => { droneTuning.bankMax = v } },
-    { name: 'Bank Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.bankSmoothSpeed, onChange: v => { droneTuning.bankSmoothSpeed = v } },
-    { name: 'Aim Body Tilt Gain', min: 0, max: 2, step: 0.01, value: droneTuning.aimBodyTiltGain, onChange: v => { droneTuning.aimBodyTiltGain = v } },
-    { name: 'Aim Body Tilt Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.aimBodyTiltMax, onChange: v => { droneTuning.aimBodyTiltMax = v } },
-    { name: 'Aim Body Tilt Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.aimBodyTiltSmoothSpeed, onChange: v => { droneTuning.aimBodyTiltSmoothSpeed = v } },
-    { name: 'Thrust Tilt Gain', min: 0, max: 0.02, step: 0.0001, value: droneTuning.thrustTiltGain, onChange: v => { droneTuning.thrustTiltGain = v } },
-    { name: 'Thrust Tilt Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.thrustTiltMax, onChange: v => { droneTuning.thrustTiltMax = v } },
-    { name: 'Thrust Tilt Smooth Speed', min: 1, max: 30, step: 1, value: droneTuning.thrustTiltSmoothSpeed, onChange: v => { droneTuning.thrustTiltSmoothSpeed = v } },
-  ])
-  addComponentSection(droneAnimation, 'Flight', [
-    { name: 'Grab Duration (s)', min: 0.05, max: 1, step: 0.01, value: droneTuning.flightGrabDuration, onChange: v => { droneTuning.flightGrabDuration = v } },
-    { name: 'Grab Grip Target (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: droneTuning.flightGrabTarget, onChange: v => { droneTuning.flightGrabTarget = v } },
-    { name: 'Grab Ball Rest Offset', min: 0, max: 1, step: 0.01, value: droneTuning.flightBallRestOffset, onChange: v => { droneTuning.flightBallRestOffset = v } },
-    { name: 'Rise Duration (s)', min: 0.1, max: 3, step: 0.05, value: droneTuning.flightRiseDuration, onChange: v => { droneTuning.flightRiseDuration = v } },
-    { name: 'Hold Duration (s)', min: 0, max: 10, step: 0.1, value: droneTuning.flightHoldDuration, onChange: v => { droneTuning.flightHoldDuration = v } },
-    { name: 'Descend Duration (s)', min: 0.1, max: 3, step: 0.05, value: droneTuning.flightDescendDuration, onChange: v => { droneTuning.flightDescendDuration = v } },
-    { name: 'Height (world units)', min: 50, max: 800, step: 10, value: droneTuning.flightHeight, onChange: v => { droneTuning.flightHeight = v } },
-    { name: 'Speed Scale (while elevated)', min: 0, max: 1, step: 0.01, value: droneTuning.flightSpeedScale, onChange: v => { droneTuning.flightSpeedScale = v } },
-    { name: 'Cooldown (s)', min: 1, max: 30, step: 0.5, value: droneTuning.flightCooldown, onChange: v => { droneTuning.flightCooldown = v } },
-  ])
-
-  // --- Basketball ---
+  // --- Basketball: genuinely global (one ball in scene), just its scale.
+  // Ball Offset moved into each class's own section above
   const basketballConfig = createToggleSection(debugPanel, 'Basketball')
   createSliderControl(basketballConfig, {
     name: 'Scale', min: 5, max: 40, step: 1, value: getBallRadius(), onChange: setBallRadius,
   })
-  // Per-instance fields: each class arm differs (LEGGED bigger, DRONE
-  // flipped), the same absolute offset does not land the same. One
-  // submenu per class so all 3 tune without switching the active one
-  const ballOffsetSection = createToggleSection(basketballConfig, 'Ball Offset (from paddle center, per class)')
-  const BALL_OFFSET_LABEL_BY_KEY = { manipulator: 'Manipulator', legged: 'Legged', drone: 'Drone' }
-  for (const [key, robot] of Object.entries(playerRobots)) {
-    addComponentSection(ballOffsetSection, BALL_OFFSET_LABEL_BY_KEY[key] ?? key, [
-      { name: 'Forward', min: -40, max: 40, step: 1, value: robot.ballOffsetForward, onChange: v => { robot.ballOffsetForward = v } },
-      { name: 'Side', min: -40, max: 40, step: 1, value: robot.ballOffsetSide, onChange: v => { robot.ballOffsetSide = v } },
-      { name: 'Down', min: -40, max: 40, step: 1, value: robot.ballOffsetDown, onChange: v => { robot.ballOffsetDown = v } },
-    ])
-  }
 
   // Copy config: serialize every debug-tunable parameter, ready to paste
   // back as hardcoded defaults
