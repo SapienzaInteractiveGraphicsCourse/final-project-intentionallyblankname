@@ -21,7 +21,7 @@ For a smoother experience (or for development), you can also run it locally:
 git clone https://github.com/SapienzaInteractiveGraphicsCourse/final-project-intentionallyblankname.git
 cd final-project-intentionallyblankname
 npm install
-npm run dev      # → localhost:5173
+npm run dev      # localhost:5173
 ```
 
 ---

@@ -481,6 +481,59 @@ let BALL_RADIUS = 15 // world units, source sphere has radius 1
 // >1 brightens the texel (not clamped) without tinting
 const BALL_COLOR_BRIGHTNESS = 1.15
 const collisionWorld = new CollisionWorld()
+
+// Wall backdrop: the court walls are 66 separate GLTF panel meshes, not
+// one sealed surface, so hairline seams between adjacent panels exist. At
+// a grazing camera angle those seams widen (perspective) into visible
+// gaps straight through to the skybox behind, reading as bright white
+// specks against the dark wall. An open-top tray (4 vertical panels + a
+// floor cap), derived from the real wall collision bounds and pushed
+// outward, sits just behind the perimeter: normal depth testing always
+// lets the real wall mesh win where it exists, so it only shows through
+// an actual gap, plugging it with a dark color instead of the sky. Kept
+// deliberately LOW (well under the real wall top): tall enough to hide
+// under the low parapet in front of the bleachers, short enough to never
+// peek above it, and with no roof panel, so the open sky above the walls
+// stays untouched. Never touches the GLTF geometry.
+{
+  const wallBounds = new THREE.Box3()
+  for (const box of collisionWorld.wallBoxes) wallBounds.union(box)
+  const WALL_BACKDROP_MARGIN = 150 // horizontal push-out behind the real panels
+  const WALL_BACKDROP_TOP = 60 // stays hidden under the parapet in front of it
+  const WALL_BACKDROP_BOTTOM = -20
+  const outMinX = wallBounds.min.x - WALL_BACKDROP_MARGIN
+  const outMaxX = wallBounds.max.x + WALL_BACKDROP_MARGIN
+  const outMinZ = wallBounds.min.z - WALL_BACKDROP_MARGIN
+  const outMaxZ = wallBounds.max.z + WALL_BACKDROP_MARGIN
+  const backdropHeight = WALL_BACKDROP_TOP - WALL_BACKDROP_BOTTOM
+  const backdropCenterY = (WALL_BACKDROP_BOTTOM + WALL_BACKDROP_TOP) / 2
+  const backdropMaterial = new THREE.MeshBasicMaterial({ color: 0x3a3632, side: THREE.DoubleSide })
+  function makeBackdropPanel(width, x, z, rotationY) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(width, backdropHeight), backdropMaterial)
+    panel.position.set(x, backdropCenterY, z)
+    panel.rotation.y = rotationY
+    panel.castShadow = false
+    panel.receiveShadow = false
+    scene.add(panel)
+  }
+  makeBackdropPanel(outMaxX - outMinX, (outMinX + outMaxX) / 2, outMinZ, 0)
+  makeBackdropPanel(outMaxX - outMinX, (outMinX + outMaxX) / 2, outMaxZ, 0)
+  makeBackdropPanel(outMaxZ - outMinZ, outMinX, (outMinZ + outMaxZ) / 2, Math.PI / 2)
+  makeBackdropPanel(outMaxZ - outMinZ, outMaxX, (outMinZ + outMaxZ) / 2, Math.PI / 2)
+
+  // Floor cap: closes the tray from below, same as the first version that
+  // was already fine (only the roof caused the sky to disappear)
+  const floorPanel = new THREE.Mesh(
+    new THREE.PlaneGeometry(outMaxX - outMinX, outMaxZ - outMinZ),
+    backdropMaterial
+  )
+  floorPanel.rotation.x = -Math.PI / 2
+  floorPanel.position.set((outMinX + outMaxX) / 2, WALL_BACKDROP_BOTTOM, (outMinZ + outMaxZ) / 2)
+  floorPanel.castShadow = false
+  floorPanel.receiveShadow = false
+  scene.add(floorPanel)
+}
+
 // Globals kept as loose `let` here: genuinely global values (camera/
 // crosshair), not per-class geometry/animation (those are instance fields
 // on RobotBase, see debugPanel.js)

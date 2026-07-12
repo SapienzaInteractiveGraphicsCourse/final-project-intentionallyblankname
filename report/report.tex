@@ -394,6 +394,24 @@ Table~\ref{tab:course} maps specific claims from the course slides to their impl
 \end{table}
 
 % =============================================================================
+\section{How to Run and Deploy}
+\label{sec:run}
+% =============================================================================
+
+The live build is hosted on GitHub Pages:
+\url{https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/}, no installation required.
+
+To run locally:
+\begin{lstlisting}[style=js, language=bash]
+git clone https://github.com/SapienzaInteractiveGraphicsCourse/final-project-intentionallyblankname.git
+cd final-project-intentionallyblankname
+npm install
+npm run dev      # -> localhost:5173
+\end{lstlisting}
+
+Deployment is automatic: a GitHub Actions workflow (\code{.github/workflows/deploy.yml}) builds the Vite bundle and publishes \code{dist/} to Pages on every push to \code{main}.
+
+% =============================================================================
 \section{Conclusions and Limitations}
 \label{sec:conclusions}
 % =============================================================================
