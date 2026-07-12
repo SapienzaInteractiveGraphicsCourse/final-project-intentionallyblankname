@@ -1,65 +1,55 @@
 import * as THREE from 'three'
 
-// collisione fisica col ferro stesso: il toro giace nel piano XZ — raggio
-// principale/tubo derivati dagli stessi accessor GLTF di 'Torus_ring_0'/
-// 'Torus_2_ring_0' (bounding box world ±43.75 in XZ, ±3.75 in Y attorno al
-// centro). RIM_RING_RADIUS esportata (non solo interna alla classe): serve
-// anche fuori, per il cono d'assistenza al canestro in main.js
-// (HOOP_ASSIST_BASE_RADIUS). RIM_TUBE_RADIUS esportata anch'essa: serve al
-// wireframe del ferro in CollisionDebugView.js, che deve disegnare lo
-// stesso identico torus usato dalla fisica, non una tube radius ricopiata
-// a mano che potrebbe disallinearsi
+// Rim torus (XZ plane), radii from the GLTF accessors.
+// needs RIM_RING_RADIUS for the hoop-assist cone, CollisionDebugView.js
+// needs both to draw the exact same torus the physics uses.
 export const RIM_RING_RADIUS = 40
 export const RIM_TUBE_RADIUS = 4
 
-// Wrapper OOP sopra le collisioni ambientali (backboard/ferro/muri/pali/
-// panchine): possiede gli array di geometria (estratti dagli accessor del
-// GLTF, non stimati a occhio — vedi i commenti su ogni array) e il metodo
-// resolve() che li controlla tutti in un colpo solo. Nessun motore fisico:
-// sfera contro AABB/toro, riflessione della velocità sulla normale più
-// vicina (v' = v - (1+restituzione)(v·n)n), stesso approccio a mano già
-// usato per il palleggio.
-export class CollisionWorld {
+// All static court collisions (backboard/rim/walls/poles/benches): owns the
+// geometry arrays (extracted from GLTF accessors) and
+// resolve(), which checks them all at once. No physics engine — sphere vs
+// AABB/torus with velocity reflection v' = v - (1+e)(v·n)n.
+export class CollisionWorld 
+{
   constructor() {
-    // Collisione backboard: coordinate NON stimate a occhio — estratte
-    // analizzando gli accessor del GLTF (bounding box world-space delle
-    // mesh 'Cube_2_5_Mat_0'/'Cube_3_5_Mat_0')
-    const BACKBOARD_HALF_THICKNESS = 4 // il pannello reale ha spessore ~0 nel GLTF (piano perfetto): gliene serve uno per il test contro-AABB
-    this.BACKBOARD_RESTITUTION = 0.15 // e=0.5 era troppo vivo (canestro quasi impossibile) — molto più smorzato
-    this.BACKBOARD_TOP_Y = 340 // bordo superiore reale del pannello — riusato anche dal cono d'assistenza (applyHoopAssist in main.js)
-    this.backboardBoxes = [
-      new THREE.Box3(
+    // Backboard boxes: world-space bounds from the GLTF accessors
+    const BACKBOARD_HALF_THICKNESS = 4  // the real panel is a zero-thickness plane; the AABB test needs some
+    this.BACKBOARD_RESTITUTION = 0.15   // heavily damped, livelier values made scoring nearly impossible
+    this.BACKBOARD_TOP_Y = 340          // real top edge, also used by the hoop-assist cone
+
+    this.backboardBoxes = 
+    [
+      new THREE.Box3
+      (
         new THREE.Vector3(1139.8 - BACKBOARD_HALF_THICKNESS, 230, -75),
         new THREE.Vector3(1139.8 + BACKBOARD_HALF_THICKNESS, this.BACKBOARD_TOP_Y, 75)
       ),
-      new THREE.Box3(
+      new THREE.Box3
+      (
         new THREE.Vector3(-1134.2 - BACKBOARD_HALF_THICKNESS, 230, -75),
         new THREE.Vector3(-1134.2 + BACKBOARD_HALF_THICKNESS, this.BACKBOARD_TOP_Y, 75)
       ),
     ]
 
     this.RIM_RESTITUTION = 0.3
-    // raggio di rilevamento canestro: il vero raggio geometrico
-    // dell'APERTURA del ferro (RIM_RING_RADIUS - RIM_TUBE_RADIUS, il buco
-    // vuoto al centro), non solo lo spazio in cui la palla non tocca MAI
-    // il ferro (quello sarebbe più stretto, sottraendo anche il raggio
-    // della palla) — un tiro che sfiora l'interno del ferro entra
-    // comunque nella realtà, "tutto il rim" deve contare come canestro
+
+    // Score-detection radius: the full geometric opening of the rim
+
     const hoopDetectionRadius = RIM_RING_RADIUS - RIM_TUBE_RADIUS
-    this.hoops = [
+    this.hoops = 
+    [
       { center: new THREE.Vector3(1079.85, 262.55, 2.5), radius: hoopDetectionRadius },
       { center: new THREE.Vector3(-1074.15, 262.55, -2.5), radius: hoopDetectionRadius },
     ]
 
-    // muri: TUTTE le 66 mesh reali del sottoalbero 'walls' nel GLTF
-    // (pannelli verticali + gradoni delle tribune), non un'approssimazione
-    // a rettangolo per lato — quella lasciava buchi ovunque i pannelli
-    // reali non arrivavano fino all'estremo scelto, e la palla ci passava
-    // attraverso esattamente lì. Bounding box world-space letti
-    // direttamente dagli accessor del GLTF, uno ad uno, tramite script
-    // Node dedicato — non un motore fisico che legge la scena da solo
+    // Walls: all 66 real meshes of the GLTF 'walls' subtree (panels +
+    // bleacher steps), extracted one by one via a Node script, a per-side
+    // aggregate rectangle left holes the ball flew through
+
     this.WALL_RESTITUTION = 0.55
-    this.wallBoxes = [
+    this.wallBoxes = 
+    [
       new THREE.Box3(new THREE.Vector3(-1731, 0, -1579), new THREE.Vector3(1265, 400, -1027)), // Cube_5_wall_0
       new THREE.Box3(new THREE.Vector3(-1731, 0, -1047), new THREE.Vector3(945, 400, -1047)), // Cube_5_floor_0
       new THREE.Box3(new THREE.Vector3(1245, 200, -1579), new THREE.Vector3(1445, 400, -1347)), // Cube_4_5_wall_0
@@ -128,46 +118,34 @@ export class CollisionWorld {
       new THREE.Box3(new THREE.Vector3(1190, 0, 1850), new THREE.Vector3(1490, 400, 1870)), // Cube_1_4_4_wall_0
     ]
 
-    // pali lampione: piccola AABB verticale su ognuna delle 4 posizioni
-    // reali (stesse di lampPositions in main.js), non un cilindro vero —
-    // approssimazione sufficiente per un oggetto sottile che la palla
-    // colpisce di rado
+    // Lamp poles: thin vertical AABBs at the 4 real lamp positions
+
     this.POLE_RESTITUTION = 0.55
     const POLE_HALF_WIDTH = 20
     const polePositionsXZ = [[615.87, -845], [615.87, 845], [-615.87, -845], [-615.87, 845]]
-    this.poleBoxes = polePositionsXZ.map(([x, z]) => new THREE.Box3(
+
+    this.poleBoxes = polePositionsXZ.map(([x, z]) => new THREE.Box3
+    (
       new THREE.Vector3(x - POLE_HALF_WIDTH, 0, z - POLE_HALF_WIDTH),
       new THREE.Vector3(x + POLE_HALF_WIDTH, 300, z + POLE_HALF_WIDTH)
     ))
 
-    // panchine: bounding box reale dell'intero sottoalbero 'bench_1'/
-    // 'bench' nel GLTF (assi in legno + telaio), stesso procedimento di
-    // muri/pali/backboard
+    // Benches: real bounding boxes of the GLTF bench subtrees
     this.BENCH_RESTITUTION = 0.5
     this.benchBoxes = [
       new THREE.Box3(new THREE.Vector3(412, 0, 821), new THREE.Vector3(814, 50, 890)),
       new THREE.Box3(new THREE.Vector3(-815, 0, 822), new THREE.Vector3(-413, 50, 891)),
     ]
 
-    // dopo un urto, quanto ignorare NUOVE collisioni CON LO STESSO
-    // OGGETTO: la posizione viene già respinta esattamente al bordo del
-    // volume espanso nello stesso passo (vedi resolveSphereBoxCollision),
-    // quindi bastano pochi passi fisici perché la velocità riflessa la
-    // allontani abbastanza da non essere ricatturata subito — non serve
-    // una finestra lunga. PER OGGETTO (la cooldownMap passata a
-    // resolve(), non posseduta qui): un'unica mappa globale sospendeva
-    // TUTTE le collisioni dopo un rimbalzo qualsiasi (un rimbalzo sul
-    // ferro seguito da un volo verso la backboard attraversava la
-    // backboard). 0.3s (primo tentativo) era comunque troppo lungo:
-    // backboard e ferro sono fisicamente vicini, un rimbalzo sul ferro
-    // seguito a ruota da un ritorno verso la STESSA backboard (entro
-    // 0.3s, tutt'altro che raro alle velocità di tiro in gioco) restava
-    // comunque in cooldown su quell'oggetto specifico e ci passava
-    // attraverso
+    // Post-hit cooldown PER OBJECT (the cooldownMap passed to resolve()):
+    // a single global cooldown let a rim bounce disable the backboard
+    // check right when the deflected ball reached it. Short (0.05s vs an
+    // initial 0.3s) because position is already pushed to the volume edge
+    // in the same step, and rim→same-backboard rebounds within 0.3s are
+    // common at game shot speeds
     this.COLLISION_COOLDOWN = 0.05
 
-    // scratch (riusati ad ogni chiamata, non riallocati) per la matematica
-    // di resolveSphereBoxCollision/resolveSphereTorusCollision
+    // Scratch objects reused every call (hot path, no per-call allocation)
     this._scratchBox = new THREE.Box3()
     this._scratchNormal = new THREE.Vector3()
     this._scratchRimPlanar = new THREE.Vector3()
@@ -175,42 +153,56 @@ export class CollisionWorld {
     this._scratchRimNormal = new THREE.Vector3()
   }
 
-  // sfera (pallone) contro AABB, senza motore fisico: trova la faccia con
-  // la penetrazione minore (quella da cui "conviene" uscire) e la tratta
-  // come normale di contatto, poi riflette solo la componente di velocità
-  // che va VERSO la superficie — v' = v - (1+restituzione)(v·n)n, la
-  // formula standard di rimbalzo elastico/anelastico. Ritorna true se
-  // c'è stata davvero una collisione (usato anche dalla preview di
-  // traiettoria per sapere dove si ferma il tratto nero)
-  resolveSphereBoxCollision(position, velocity, box, radius, restitution) {
-    const scratchBox = this._scratchBox.copy(box).expandByScalar(radius)
+  // Sphere vs AABB: exit through the face with the smallest penetration,
+  // reflect only the velocity component going INTO the surface. Returns
+  // true on real contact (the trajectory preview uses it too)
+  resolveSphereBoxCollision(position, velocity, box, radius, restitution) 
+  {
+
+    /*
+    Parameters:
+    - position: THREE.Vector3, ball center in world space, MUTATED in place (pushed out of the box on contact)
+    - velocity: THREE.Vector3, ball velocity, MUTATED in place (normal component reflected on contact)
+    - box: THREE.Box3, the collidable AABB (never modified, copied into the scratch)
+    - radius: ball radius, used to expand the box so the sphere test becomes a point test
+    - restitution: coefficient e in v' = v - (1+e)(v·n)n
+
+    Returns:
+    - true if a real contact happened (position/velocity were corrected), false otherwise
+    */
+
+    const scratchBox = this._scratchBox.copy(box).expandByScalar(radius) //used the scratch box
     if (!scratchBox.containsPoint(position)) return false
-    const dists = [
+
+    //List of distances from edges (from inside)
+    //WE ARE ASSUMING a slight intersection so we can find the MINIMAL distance as exit
+    const dists = 
+    [
       position.x - scratchBox.min.x, scratchBox.max.x - position.x,
       position.y - scratchBox.min.y, scratchBox.max.y - position.y,
       position.z - scratchBox.min.z, scratchBox.max.z - position.z,
     ]
     let minIdx = 0
-    for (let i = 1; i < 6; i++) if (dists[i] < dists[minIdx]) minIdx = i
-    const axis = Math.floor(minIdx / 2) // 0=x, 1=y, 2=z
-    const sign = minIdx % 2 === 0 ? -1 : 1 // faccia min → normale negativa, faccia max → positiva
+    for (let i = 1; i < 6; i++) if (dists[i] < dists[minIdx]) minIdx = i // find the min index
+    const axis = Math.floor(minIdx / 2) // 0=x, 1=y, 2=z get axis
+    const sign = minIdx % 2 === 0 ? -1 : 1 // min face → negative normal, max face → positive
     const normal = this._scratchNormal.set(0, 0, 0).setComponent(axis, sign)
-    // spinge la palla esattamente sul bordo del volume espanso (risolve la
-    // compenetrazione) lungo la normale di uscita
+    // push the ball exactly onto the expanded volume's edge (de-penetrate)
     position.addScaledVector(normal, dists[minIdx])
+    // This is mathematically equivalent to v' = v - (1+e)(v·n)n
     const vDotN = velocity.dot(normal)
     if (vDotN < 0) velocity.addScaledVector(normal, -(1 + restitution) * vDotN)
     return true
   }
 
-  // sfera contro toro (il ferro): il toro giace nel piano XZ, quindi si
-  // proietta il centro palla sul cerchio principale (raggio ringRadius)
-  // per trovare il punto più vicino sul "tubo" — da lì è di nuovo un urto
-  // sfera-sfera (raggio tubeRadius + radius), stessa formula di riflessione
+  // Sphere vs torus (the rim, XZ plane): project the ball center onto the
+  // main ring to find the nearest tube point, then it reduces to a
+  // sphere-sphere hit with the same reflection formula
   resolveSphereTorusCollision(position, velocity, center, ringRadius, tubeRadius, radius, restitution) {
     const planar = this._scratchRimPlanar.set(position.x - center.x, 0, position.z - center.z)
     const planarDist = planar.length()
-    if (planarDist < 1e-6) return false // esattamente sull'asse verticale del ferro: nessuna direzione radiale sensata
+
+    if (planarDist < 1e-6) return false // exactly on the rim axis: no sensible radial direction
     planar.multiplyScalar(ringRadius / planarDist)
     const nearest = this._scratchRimNearest.set(center.x + planar.x, center.y, center.z + planar.z)
     const normal = this._scratchRimNormal.copy(position).sub(nearest)
@@ -224,13 +216,12 @@ export class CollisionWorld {
     return true
   }
 
-  // true se l'oggetto è ancora in cooldown (e ne scala il tempo residuo).
-  // cooldownMap è passata da fuori (non un campo dell'istanza) perché la
-  // preview di traiettoria simula un tiro IPOTETICO ogni frame mentre si
-  // mira — se scrivesse nella stessa mappa del volo reale, un urto
-  // simulato durante la sola mira "occuperebbe" il cooldown di un oggetto
-  // prima ancora che il tiro vero parta
-  isOnCooldown(obj, dt, cooldownMap) {
+  // True if the object is still on cooldown (also decrements it).
+  // cooldownMap is caller-owned: the trajectory preview simulates a
+  // hypothetical shot every frame and must not consume the real flight's
+  // cooldowns while merely aiming
+  isOnCooldown(obj, dt, cooldownMap) 
+  {
     const remaining = cooldownMap.get(obj)
     if (!remaining) return false
     const next = remaining - dt
@@ -239,26 +230,23 @@ export class CollisionWorld {
     return false
   }
 
-  // helper condiviso dai 4 giri box (backboard/muri/pali/panchine) dentro
-  // resolve() — metodo vero (sul prototype, nessuna allocazione ad ogni
-  // chiamata), non una closure locale ricreata ogni volta: resolve() gira
-  // a 120Hz (palleggio)/240Hz (volo di tiro)/fino a 2400 volte per frame
-  // (preview di traiettoria), una nuova arrow function per chiamata sarebbe
-  // pressione GC pura in un hot path
-  resolveBoxAt(box, restitution, position, velocity, dt, cooldownMap, ballRadius) {
+  // Shared by the 4 box loops in resolve(). A real prototype method, not a
+  // closure recreated per call: resolve() runs up to 2400x/frame in the
+  resolveBoxAt(box, restitution, position, velocity, dt, cooldownMap, ballRadius) 
+  {
     if (this.isOnCooldown(box, dt, cooldownMap)) return false
     if (this.resolveSphereBoxCollision(position, velocity, box, ballRadius, restitution)) {
       cooldownMap.set(box, this.COLLISION_COOLDOWN)
       return true
     }
     return false
-  }
+  } 
 
-  // backboard/ferro/muri/pali/panchine: stesso identico giro di controlli
-  // per il volo fisico reale E la preview di traiettoria — un nuovo tipo
-  // di collidable va aggiunto qui una volta sola, non in due posti
-  // separati. Ritorna true se almeno un urto è avvenuto in questa chiamata
-  resolve(position, velocity, dt, cooldownMap, ballRadius) {
+  // One pass over every collidable, shared by the real shot flight AND the
+  // trajectory preview — new collidable types get added here only.
+  // Returns true if at least one hit occurred
+  resolve(position, velocity, dt, cooldownMap, ballRadius) 
+  {
     let hit = false
     for (const box of this.backboardBoxes) {
       if (this.resolveBoxAt(box, this.BACKBOARD_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
@@ -270,8 +258,6 @@ export class CollisionWorld {
         cooldownMap.set(hoop, this.COLLISION_COOLDOWN)
       }
     }
-    // muri e pali: oggetti rigidi, restituzione più viva della backboard
-    // (che è smorzata apposta)
     for (const box of this.wallBoxes) {
       if (this.resolveBoxAt(box, this.WALL_RESTITUTION, position, velocity, dt, cooldownMap, ballRadius)) hit = true
     }

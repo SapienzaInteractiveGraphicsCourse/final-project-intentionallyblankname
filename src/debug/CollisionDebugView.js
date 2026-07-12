@@ -213,7 +213,7 @@ export function initCollisionDebugView(ctx) {
     if (!category || e.repeat) return
     const group = groups[category]
     group.visible = !group.visible
-    console.log(`%c[Collision Debug] ${CATEGORY_LABELS[category]}: ${group.visible ? 'ON' : 'OFF'}`, 'color: #00ff88; font-weight: bold')
+    console.log(`[Collision Debug] ${CATEGORY_LABELS[category]}: ${group.visible ? 'ON' : 'OFF'}`)
   })
 
   return { update }

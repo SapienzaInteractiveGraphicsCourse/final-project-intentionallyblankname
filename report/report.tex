@@ -5,24 +5,31 @@
 % ---------------------------------------------------------------------------
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[margin=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.4cm]{geometry}
 \usepackage{xcolor}
-\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black, citecolor=blue!50!black]{hyperref}
 \usepackage{graphicx}
 \usepackage{caption}
-\usepackage{subcaption}
 \usepackage{booktabs}
 \usepackage{tabularx}
-\usepackage{parskip}
+\usepackage[skip=0.45em]{parskip}
 \usepackage{enumitem}
 \usepackage{titlesec}
 \usepackage{listings}
 \usepackage{placeins}
 \usepackage{amsmath}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black,
+            citecolor=blue!50!black,
+            pdftitle={Mecha-Basketball 3D --- Technical Report},
+            pdfauthor={Alessandro Carotenuto}]{hyperref}
 
 % ---------------------------------------------------------------------------
-% Code listing style (for the short JS snippets quoted in the text)
+% Global styling
 % ---------------------------------------------------------------------------
+\captionsetup{font=small, labelfont=bf, skip=4pt}
+\renewcommand{\arraystretch}{1.15}
+
 \lstdefinestyle{js}{
   basicstyle=\ttfamily\footnotesize,
   keywordstyle=\color{blue!60!black}\bfseries,
@@ -31,6 +38,7 @@
   numbers=none,
   breaklines=true,
   frame=single,
+  rulecolor=\color{black!25},
   backgroundcolor=\color{black!3},
   tabsize=2,
 }
@@ -38,8 +46,13 @@
 
 \titleformat{\section}{\normalfont\Large\bfseries}{\thesection}{1em}{}
 \titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection}{1em}{}
+\titlespacing*{\section}{0pt}{1.1em}{0.5em}
+\titlespacing*{\subsection}{0pt}{0.9em}{0.35em}
 
 \newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO]} #1}}
+\newcommand{\figplaceholder}[1]{%
+  \fbox{\parbox{0.85\textwidth}{\centering\vspace{1em}\textcolor{red}{TODO: figure --- #1}\vspace{1em}}}}
 
 % ---------------------------------------------------------------------------
 % Title
@@ -57,179 +70,87 @@
 \begin{center}
 Interactive Graphics --- Prof.\ Marco Schaerf\\
 Dept.\ of Computer, Control and Management Engineering (DIAG)
+
+\vspace{0.8em}
+\textbf{Repository}\\
+\small\url{https://github.com/SapienzaInteractiveGraphicsCourse/final-project-intentionallyblankname}\\[0.4em]
+\normalsize\textbf{Live demo}\\
+\small\todo{GitHub Pages link, once deployed (see Section~\ref{sec:conclusions})}
 \end{center}
 
-\vspace{1em}
-\begin{center}
-\begin{tabular}{ll}
-\textbf{Repository} & \url{https://github.com/SapienzaInteractiveGraphicsCourse/final-project-intentionallyblankname} \\
-\textbf{Live demo} & \textcolor{red}{TODO: GitHub Pages link, once deployed (see Section~\ref{sec:limitations})} \\
-\end{tabular}
-\end{center}
-
-\vspace{1em}
-\tableofcontents
-\newpage
+\vspace{0.5em}
+\setcounter{tocdepth}{1}
+{\small\tableofcontents}
+\vspace{0.5em}
 
 % =============================================================================
 \section{Project Overview}
 % =============================================================================
 
-\textit{Mecha-Basketball 3D} is a simulated basketball match between procedurally generated robots, built with Three.js and rendered on a GLTF basketball court. The user selects a robot class from a selection screen, each with a distinct stat profile and special move, and then plays or watches an animated simulation of the match --- steering, dribbling, aiming and shooting are all driven by real-time user input rather than a scripted replay.
+\textit{Mecha-Basketball 3D} is a simulated basketball match between procedurally generated robots, built with Three.js and rendered on a GLTF basketball court. The user selects a robot class, each with a distinct stat profile and special move, then plays the match --- steering, dribbling, aiming and shooting are all driven by real-time user input rather than a scripted replay.
 
-No external 3D model is used for the robots: each class is built entirely in Three.js from primitives, organized in hierarchical \code{THREE.Group} structures and animated procedurally in JavaScript. The only two external assets in the project are the basketball court and the basketball itself, both GLTF models (Section~\ref{sec:assets}).
+No external 3D model is used for the robots: each class is built entirely in Three.js from primitives, organized in hierarchical \code{THREE.Group} structures and animated procedurally in JavaScript; the only two external assets are the court and the ball, both GLTF models (Section~\ref{sec:env}). Three robot classes are implemented, all fully playable by both the human player and the enemy AI, and swappable from the Main Menu without a page reload. Each class shares a homogeneous stat struct \verb|{ speed, shooting, steal, block }|, used both to drive gameplay (movement speed, shot-assist strength, steal/block cooldowns) and to render comparison bars on the selection screen.
 
-\subsection{Robot Roster}
-
-Three robot classes are implemented, replacing an earlier concept (COLOSSUS/GLITCH/SENTINEL) that was scrapped before implementation began. All three are fully playable, both by the human player and by the enemy AI in 1v1 mode, and can be swapped from the Main Menu without a page reload.
-
-\begin{table}[h!]
+\begin{table}[htbp]
 \centering
-\begin{tabularx}{\textwidth}{l l l l}
+\small
+\begin{tabular}{l l l c c c c}
 \toprule
-\textbf{Class} & \textbf{Locomotion} & \textbf{Special Move} & \textbf{Status} \\
+\textbf{Class} & \textbf{Locomotion} & \textbf{Special Move} & \textbf{Spd} & \textbf{Sht} & \textbf{Stl} & \textbf{Blk} \\
 \midrule
-Mobile Manipulator (AMR) & Wheels & Dash & Implemented, playable \\
-Legged Manipulator & Legs (real trot gait) & Jump & Implemented, playable \\
-Drone & Flight (rotors) & Flight (grab-and-rise) & Implemented, playable \\
+Mobile Manipulator (AMR) & Wheels & Dash & 3 & 1 & 3 & 3 \\
+Legged Manipulator & Legs (trot gait) & Jump & 2 & 3 & 2 & 5 \\
+Drone & Flight (rotors) & Flight (grab-and-rise) & 5 & 2 & 1 & 1 \\
 \bottomrule
-\end{tabularx}
-\caption{Robot roster and status.}
+\end{tabular}
+\caption{Robot roster and stats (scale 1--5, except Shooting which is 1--3).}
 \end{table}
 
-Each class shares a homogeneous stat struct \verb|{ speed, shooting, steal, block }| (same keys, different values), used both to drive gameplay (movement speed, shot-assist strength, steal/block cooldowns) and to render comparison bars on the selection screen.
+Two game modes are selectable from the Main Menu: \textbf{Practice} (one robot on an empty court) and \textbf{1v1} (an AI-controlled opponent with tactical navigation, defense, steal and block; first to 11 points wins).
 
-\subsection{Game Modes}
+% =============================================================================
+\section{Development Environment, Libraries and Assets}
+\label{sec:env}
+% =============================================================================
 
-Two game modes are selectable from the Main Menu:
+The project is built with \textbf{Three.js} (\code{\^{}0.178.0}, npm-installed) on top of \textbf{Vite} (\code{\^{}6.0.0}, dev server and bundler), in vanilla JavaScript ES modules --- no TypeScript, no framework. Three.js was chosen over raw WebGL so the effort could go into modelling, animation and interaction rather than shader/buffer boilerplate. \code{vite.config.js} sets \verb|base: './'| so the built bundle works from a GitHub Pages project subpath.
+
+The renderer is configured for physically-plausible shading and soft shadows: \code{PCFSoftShadowMap} (VSM was tried and is too slow at $4096^2$), ACES filmic tone mapping, sRGB output color space.
+
+Beyond the Three.js core, the project uses only official Three.js \emph{addons} (shipped with the \code{three} package itself): \code{GLTFLoader} (court and ball), \code{PointerLockControls} (mouse look), the \code{EffectComposer} post-processing stack (Section~\ref{sec:postfx}) and the procedural \code{Sky} skydome. No physics engine (Cannon.js, Ammo.js) was integrated: collision response and the dribble state machine are entirely hand-written. No animation library (e.g.\ tween.js, suggested by the course material) is used either: every animation --- from a single joint rotation to the full shot trajectory --- is computed by hand inside the render loop, satisfying the ``no imported animations'' requirement by construction rather than by omission.
+
+Exactly two external, pre-made 3D assets are used:
 \begin{itemize}[nosep]
-    \item \textbf{Practice}: a single player controls one robot on an otherwise empty court, useful to test movement, dribbling and shooting without pressure.
-    \item \textbf{1v1}: a second, AI-controlled robot is added (its class is chosen independently from the player's), with tactical navigation, defense, and the ability to steal or block. The match ends when either side first reaches 11 points.
+    \item \textbf{Basketball court} (Sketchfab, modified): a custom \code{GLTFLoader} plugin re-implements the \code{KHR\_materials\_pbrSpecularGlossiness} extension (removed from Three.js r152+ with no maintained replacement); several material colors were hand-edited in the raw \code{scene.gltf} to remove banding; court-line z-fighting was fixed with \code{polygonOffset}.
+    \item \textbf{Basketball}: a dedicated GLTF (not the low-quality sphere baked into the court model), with color, normal and metalness/roughness maps.
 \end{itemize}
 
-A third mode (3v3) was part of the original scope but was consciously dropped; see Section~\ref{sec:limitations}.
-
-% =============================================================================
-\section{Development Environment}
-% =============================================================================
-
-The project is built with \textbf{Three.js} (r0.178) on top of \textbf{Vite} (npm-installed, not loaded from a CDN), rather than raw WebGL. This choice trades low-level control of the GPU pipeline for a much smaller amount of boilerplate around shaders, buffers and transformation matrices, letting most of the development effort go into modelling, animation and interaction rather than into re-implementing what Three.js already provides --- the same trade-off the course material itself makes explicit when it walks through the same rotating cube written first in plain WebGL and then in Three.js.
-
-\begin{table}[h!]
-\centering
-\begin{tabularx}{\textwidth}{l X}
-\toprule
-\textbf{Tool} & \textbf{Role} \\
-\midrule
-Three.js \verb|^0.178.0| & Rendering engine (scene graph, cameras, lights, materials, post-processing) \\
-Vite \verb|^6.0.0| & Dev server and bundler (\code{npm run dev} / \code{npm run build}) \\
-Vanilla JavaScript (ES modules) & No TypeScript, no framework; native \code{import}/\code{export} throughout \\
-\bottomrule
-\end{tabularx}
-\caption{Core toolchain.}
-\end{table}
-
-The renderer is configured for physically-plausible shading and soft shadows:
-\begin{lstlisting}
-renderer.shadowMap.enabled = true
-renderer.shadowMap.type = THREE.PCFSoftShadowMap   // VSM was tried and is too slow
-renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.0
-renderer.outputColorSpace = THREE.SRGBColorSpace
-\end{lstlisting}
-
-\code{vite.config.js} sets \verb|base: './'| so the built bundle works when served from a GitHub Pages project subpath rather than a domain root.
-
-% =============================================================================
-\section{Libraries, Tools, and External Assets}
-\label{sec:assets}
-% =============================================================================
-
-\subsection{Third-Party Code}
-
-Beyond the Three.js core, the project uses only official Three.js \emph{addons} (shipped with the \code{three} package itself, not separate dependencies) and no third-party animation or physics library.
-
-\begin{table}[h!]
-\centering
-\begin{tabularx}{\textwidth}{l X}
-\toprule
-\textbf{Module} & \textbf{Purpose} \\
-\midrule
-\code{GLTFLoader} & Loads the court and ball models \\
-\code{PointerLockControls} & Mouse-look camera in Spectate mode and for orbit input in Play mode \\
-\code{EffectComposer}, \code{RenderPass}, \code{SSAOPass}, \code{OutputPass}, \code{SMAAPass} & Post-processing pipeline (ambient occlusion + anti-aliasing) \\
-\code{Sky} (\code{three/addons/objects/Sky.js}) & Procedural atmospheric skybox (Preetham/Rayleigh scattering model), driving the Time-of-Day system \\
-\bottomrule
-\end{tabularx}
-\caption{Three.js addons used.}
-\end{table}
-
-No physics engine (Cannon.js, Ammo.js, Physijs) was integrated. Collision response (Section~\ref{sec:physics}) and the automatic dribble state machine are entirely hand-written, matching the project's general preference for direct, imperative control over off-the-shelf simulation. No animation library (e.g.\ tween.js, suggested by the course material) is used either: every animation in the project --- from a single joint rotation to the full shot trajectory --- is computed by hand inside the render loop, satisfying the ``no imported animations'' requirement by construction rather than by omission.
-
-\subsection{External 3D Assets}
-
-Exactly two external, pre-made 3D assets are used, both GLTF models not authored by the team:
-
-\begin{table}[h!]
-\centering
-\begin{tabularx}{\textwidth}{l X}
-\toprule
-\textbf{Asset} & \textbf{Notes} \\
-\midrule
-Basketball court & Sourced from Sketchfab, modified: a custom \code{GLTFLoader} plugin re-implements the \code{KHR\_materials\_pbrSpecularGlossiness} extension (removed from Three.js r152+ with no maintained replacement); several material colors were hand-edited in the raw \code{scene.gltf} to remove banding; court-line z-fighting fixed with \code{polygonOffset}. \\
-Basketball & A dedicated GLTF (not the low-quality sphere baked into the court model), with color, normal and metalness/roughness maps --- see Section~\ref{sec:materials}. \\
-\bottomrule
-\end{tabularx}
-\caption{External 3D assets.}
-\end{table}
-
-\textbf{Every other visible object in the scene is procedurally generated}: all three robot classes (geometry, materials and textures), the skybox, and all synthesized sound effects (Section~\ref{sec:audio}). No robot model, texture image, or animation clip was downloaded or imported.
+\textbf{Every other visible object is procedurally generated}: all three robot classes (geometry, materials and textures), the skybox, and all synthesized sound effects (Section~\ref{sec:audio}). No robot model, texture image, audio file or animation clip was downloaded or imported.
 
 % =============================================================================
 \section{Hierarchical Models}
 \label{sec:models}
 % =============================================================================
 
-\subsection{The Shared 3R Arm}
-
 All three robot classes carry the same 3-revolute-joint manipulator arm on top of (or, for the Drone, hanging below) their locomotion base:
-\[
-\text{base (yaw)} \rightarrow \text{link1} \rightarrow \text{elbow (pitch)} \rightarrow \text{link2 (tapered)} \rightarrow \text{wrist (pitch)} \rightarrow \text{end effector + paddle}
-\]
-each joint being a nested \code{THREE.Group}, so that rotating a parent group (e.g.\ the elbow) carries every child (link2, wrist, paddle) with it --- the textbook use of a scene-graph hierarchy for an articulated model. \code{link2} uses a tapered (frustum) cross-section built from a 4-sided \code{CylinderGeometry} rather than a uniform box, giving the forearm a visibly mechanical, non-uniform profile.
+\begin{center}
+\small
+$\text{base (yaw)} \rightarrow \text{link1} \rightarrow \text{elbow (pitch)} \rightarrow \text{link2 (tapered)} \rightarrow \text{wrist (pitch)} \rightarrow \text{end effector + paddle}$
+\end{center}
+each joint being a nested \code{THREE.Group}, so that rotating a parent group (e.g.\ the elbow) carries every child (link2, wrist, paddle) with it --- the textbook use of a scene-graph hierarchy for an articulated model. Two geometric details worth noting: \code{link2} uses a tapered (frustum) cross-section built from a 4-sided \code{CylinderGeometry} (with \code{radialSegments}~$=4$ the cylinder degenerates into a square prism; different top/bottom radii turn it into a truncated pyramid); and the ball's resting point during handling is \emph{not} the paddle's surface center but the convergence point of the two V-plates' normals, at distance $d / \cos(\alpha/2)$ from the wrist ($\alpha$ being the V opening angle) --- using the surface center made the ball visibly interpenetrate the paddle.
 
-The arm code is deliberately \emph{duplicated}, not shared through a common factory, across the three \code{ModelMaker} files (\code{AMRManipulatorModelMaker.js}, \code{LeggedManipulatorModelMaker.js}, \code{DroneModelMaker.js}): the arm is dense and delicate enough (kinematics, paddle convergence math, dribble tuning) that a premature shared abstraction was judged riskier than the duplication itself. What genuinely repeated \emph{verbatim} across the three factories (geometry helpers, PBR material construction, scale/thickness setter boilerplate) was extracted into \code{geometryControlHelpers.js}.
-
-\subsection{Per-Class Hierarchy}
-
-\begin{itemize}
-    \item \textbf{Mobile Manipulator}: 4 wheels (tori) grouped under a disc chassis, with the arm mounted on top. Wheel group scale is derived from the disc radius so resizing the chassis keeps the wheels correctly attached.
-    \item \textbf{Legged Manipulator}: the wheels are replaced by 4 two-joint legs (hip + knee, both pitch), positioned at the same four offsets the wheels would occupy, each oriented radially outward so the legs visibly radiate from the four corners instead of all bending the same way. The whole robot is scaled 25\% larger than the Mobile Manipulator. A flat foot mesh is pivoted at its rear edge (ankle), not its center, mirroring the same off-center-pivot trick used for the paddle.
-    \item \textbf{Drone}: a body with four rotor arms (propellers that spin continuously) replaces the wheeled chassis; the 3R arm is mounted \emph{upside down}, hanging below the body through a fixed \verb|rotation.x = \pi| flip group inserted between the yaw base and the first link.
+Per-class hierarchy below the arm:
+\begin{itemize}[nosep]
+    \item \textbf{Mobile Manipulator}: 4 wheels (tori) grouped under a disc chassis; the wheel group's scale is derived from the disc radius, so resizing the chassis keeps the wheels attached.
+    \item \textbf{Legged Manipulator}: 4 two-joint legs (hip + knee, both pitch) at the same offsets the wheels would occupy, each oriented radially outward so the legs radiate from the corners instead of all bending the same way; 25\% larger overall. The flat foot is pivoted at its rear edge (ankle), not its center --- the same off-center-pivot trick as the paddle.
+    \item \textbf{Drone}: a body with four rotor arms (propellers spinning continuously, alternating direction between adjacent rotors); the 3R arm hangs \emph{upside down} through a fixed flip group (\code{rotation.x} $= \pi$) inserted between the yaw base and the first link.
 \end{itemize}
 
-\subsection{Robot Base Class and Stats}
+A thin OOP layer, \code{RobotBase}, wraps each procedural factory (copying its returned fields onto the instance with \code{Object.assign}), keeping geometry construction separated from game-entity code. It owns the shared \code{RobotState} FSM (\code{DRIBBLE} / \code{HANDLING} / \code{NO\_BALL}), the stat-derived \code{speed} getter, and empty special-move hooks that each subclass overrides.
 
-A thin OOP layer, \code{RobotBase}, wraps each procedural factory: the constructor calls the passed-in factory and copies its returned fields (\code{root}, \code{joints}, \code{controls}, \ldots) onto the instance with \code{Object.assign}, so the geometry-construction code and the game-entity code stay separated. \code{RobotBase} owns the shared \code{RobotState} finite-state machine (\code{DRIBBLE} / \code{HANDLING} / \code{NO\_BALL}), the \code{speed} getter (derived from the \code{speed} stat), and the default (empty) hooks for a special move, which each subclass overrides with its own behaviour.
-
-\begin{table}[h!]
+\begin{figure}[htbp]
 \centering
-\begin{tabularx}{\textwidth}{l c c c c}
-\toprule
-\textbf{Class} & \textbf{Speed} & \textbf{Shooting} & \textbf{Steal} & \textbf{Block} \\
-\midrule
-Mobile Manipulator & 3 & 1 & 3 & 3 \\
-Legged Manipulator & 2 & 3 & 2 & 5 \\
-Drone & 5 & 2 & 1 & 1 \\
-\bottomrule
-\end{tabularx}
-\caption{Stat values per class (scale 1--5, except Shooting which is 1--3).}
-\end{table}
-
-\begin{figure}[h!]
-\centering
-% TODO: screenshot of the three robot selection cards (Main Menu -> ROBOT screen)
-\fbox{\parbox{0.9\textwidth}{\centering\vspace{3em}\textcolor{red}{TODO: figure --- Main Menu robot selection screen, 3 cards with live 3D preview}\vspace{3em}}}
+\figplaceholder{Main Menu robot selection screen, 3 cards with live 3D preview}
 \caption{The robot selection screen, with live-dribbling 3D previews and stat bars.}
 \end{figure}
 
@@ -240,128 +161,91 @@ Drone & 5 & 2 & 1 & 1 \\
 
 \subsection{Lights}
 
-\begin{table}[h!]
-\centering
-\begin{tabularx}{\textwidth}{l X}
-\toprule
-\textbf{Light} & \textbf{Role} \\
-\midrule
-1 \code{HemisphereLight} & Warm ambient term approximating the image-based lighting the original Sketchfab scene used \\
-1 \code{DirectionalLight} & Key light with a $4096^2$ shadow map, frustum sized to cover the whole court \\
-4 \code{PointLight} & Court lamp posts (candela-scale intensity, physically-based inverse-square falloff) \\
-2 \code{SpotLight} & Hoop fixtures, lit only at Sunset/Night (toggled via intensity, never \code{.visible}, to avoid a shadow-map-allocation stutter the first time a light becomes visible) \\
-\bottomrule
-\end{tabularx}
-\caption{Scene lighting.}
-\end{table}
+The scene uses 1 \code{HemisphereLight} (warm ambient term approximating the image-based lighting of the original Sketchfab scene), 1 \code{DirectionalLight} (key light with a $4096^2$ shadow map, frustum sized to cover the whole court), 4 \code{PointLight} (court lamp posts, candela-scale intensity with physically-based inverse-square falloff) and 2 \code{SpotLight} (hoop fixtures, lit only at Sunset/Night --- toggled via intensity, never \code{.visible}, to avoid a shadow-map-allocation stutter the first time a light becomes visible). All light colors, intensities and the sun position are driven by a \code{TimeOfDay} preset table (Sunrise/Day/Sunset/Night) and cross-fade smoothly (2.5\,s, smoothstep-eased) between presets instead of snapping (Section~\ref{sec:animation}).
 
-All light colors, intensities and the directional light's position are driven by a \code{TimeOfDay} preset table (Sunrise/Day/Sunset/Night, selectable from the Main Menu), and cross-fade smoothly (2.5\,s, smoothstep-eased) between presets instead of snapping instantly --- Section~\ref{sec:animation} details the transition system.
+\paragraph{Shadow tuning and scene scale.} The court GLTF uses very large, roughly centimeter-scale units (thousands of units across), and every Three.js parameter with physical semantics had to be recalibrated, since library defaults assume scenes of $\sim$1--10 units: the shadow frustum must span $\pm 2500$ units, which at $4096^2$ texels gives low texel density and caused shadow acne until \code{shadow.bias}/\code{normalBias} were tuned; point-light intensity is in candela with inverse-square decay, so at $\sim$250 units lamp-to-ground values around $2 \times 10^5$ are needed; and each lamp's light sits at the center of its solid glass globe, self-shadowing against its own shell unless \code{shadow.camera.near} is raised beyond the globe radius.
+
+\subsection{Post-Processing}
+\label{sec:postfx}
+
+Rendering goes through an \code{EffectComposer} pipeline --- \code{RenderPass} $\rightarrow$ \code{SSAOPass} $\rightarrow$ \code{OutputPass} $\rightarrow$ \code{SMAAPass}. Two integration details are easy to get wrong. First, SSAO: \code{minDistance} / \code{maxDistance} are \emph{normalized} fractions of the near$\rightarrow$far depth range, not world units (world-scale values silently disable the effect); a \code{camera.near} of $0.1$ against a \code{far} of $5000$ saturates depth-buffer precision (raised to $5$); and the kernel radius had to shrink ($90 \rightarrow 12$) to stop surfaces far behind a silhouette from reading as local occlusion (dark halos around edges). Second, \code{renderer.antialias} has no effect once rendering goes through the composer's internal render targets, so anti-aliasing is reintroduced with an \code{SMAAPass} as the last pass.
 
 \subsection{Textures}
 
-Two texture types are present, satisfying the ``textures of at least two different kinds'' requirement with margin:
-
-\begin{itemize}[nosep]
-    \item \textbf{Downloaded/external}: the basketball's color map, and the court's diffuse color map (from the Sketchfab source) --- no normal/roughness map on the court geometry itself.
-    \item \textbf{Procedurally generated}: color + normal + metalness/roughness maps on the basketball (dedicated GLTF); and normal + roughness + bump maps generated at runtime (height-field $\rightarrow$ gradient, the same technique used by comparable projects surveyed in the scouting phase) for every robot's body/arm materials, for the wooden benches, and for the lamp-post material.
-\end{itemize}
-
-\begin{figure}[h!]
-\centering
-% TODO: close-up screenshot of a robot showing the procedural normal/roughness texture detail
-\fbox{\parbox{0.9\textwidth}{\centering\vspace{3em}\textcolor{red}{TODO: figure --- close-up of a robot body showing procedural PBR texture detail}\vspace{3em}}}
-\caption{Procedurally generated normal/roughness detail on a robot's chassis.}
-\end{figure}
+Two texture types are present, satisfying the ``two different kinds'' requirement with margin: \textbf{downloaded} (the basketball's color map and the court's diffuse color map) and \textbf{procedurally generated} --- normal + metalness/roughness maps on the ball, and normal/roughness/bump maps generated at runtime (height-field $\rightarrow$ gradient) for every robot's materials, the wooden benches and the lamp posts.
 
 \subsection{Procedural Skybox}
 
-The flat background color originally used behind the court was replaced with \code{three/addons/objects/Sky.js}, a procedural atmospheric-scattering skydome (Preetham model) --- no HDR image is downloaded. The sky's sun direction is always derived directly from the scene's real \code{DirectionalLight} position (normalized), rather than tuned as an independent parameter, guaranteeing that the bright part of the sky and the direction shadows are actually cast from always agree. Night is a special case: the Preetham model is built for daylight scattering and degenerates visually below the horizon, so at Night the sky mesh is hidden and a flat dark color is used instead, with the swap happening only once the animated transition into Night has fully completed.
+The flat background color was replaced with the \code{Sky} addon, a procedural atmospheric-scattering skydome (Preetham model) --- no HDR image is downloaded. The sky's sun direction is always derived from the real \code{DirectionalLight} position (normalized), never tuned independently: an earlier version kept them separate and the sky's bright glow ended up 80--100\textdegree{} away from where shadows were cast; deriving both from one value makes them agree by construction. At Night the Preetham model degenerates (it is built for daylight scattering), so the sky mesh is swapped for a flat dark color once the animated transition has fully completed.
+
+\begin{figure}[htbp]
+\centering
+\figplaceholder{close-up of a robot body showing procedural PBR texture detail}
+\caption{Procedurally generated normal/roughness detail on a robot's chassis.}
+\end{figure}
 
 % =============================================================================
 \section{Animation}
 \label{sec:animation}
 % =============================================================================
 
-Every animation in the project is computed imperatively inside the render loop (\code{animate()}, driven by \code{requestAnimationFrame}); nothing is imported, and no \code{AnimationMixer}/keyframe clip is used anywhere.
+Every animation is computed imperatively inside the render loop (\code{requestAnimationFrame}); nothing is imported, and no \code{AnimationMixer}/keyframe clip is used anywhere.
 
-\begin{table}[h!]
+\begin{table}[htbp]
 \centering
+\small
 \begin{tabularx}{\textwidth}{l X}
 \toprule
 \textbf{System} & \textbf{Technique} \\
 \midrule
-Automatic dribble & A push/drop/rise finite-state machine, advanced at a fixed 120\,Hz timestep (accumulator pattern, decoupled from the variable render \code{delta}) and synchronized with the elbow/link1 joint motion \\
-Shot flight & Projectile motion under constant gravity, sub-stepped at 240\,Hz to avoid tunnelling through the backboard at high shot speed; collision response against backboard/rim/walls/poles/benches \\
-Wheel steering & Exponential-smoothing angular interpolation (shortest-path, wrap-safe) toward the current movement direction \\
-Legged gait & A true diagonal-pair trot cycle, only advancing while the robot's position is actually changing frame-to-frame \\
-Drone flight feel & Body bank (turning) and thrust-tilt (accelerating), composed via explicit quaternion multiplication rather than raw Euler angles, to keep the tilt axis attached to the drone's own nose regardless of its current yaw \\
-Special moves & Dash (Mobile Manipulator, straight burst), Jump (Legged Manipulator, pure parabolic arc, gated to only work when not holding the ball), Flight (Drone, grab$\to$rise$\to$hold$\to$descend, rigid ball attachment throughout) \\
+Automatic dribble & Push/drop/rise finite-state machine at a fixed 120\,Hz timestep, synchronized with the elbow/link1 joint motion \\
+Shot flight & Projectile motion under constant gravity, sub-stepped at 240\,Hz (anti-tunnelling), with full collision response \\
+Wheel steering & Exponential-smoothing angular interpolation (shortest-path, wrap-safe) toward the movement direction \\
+Legged gait & Diagonal-pair trot cycle, advancing only while the robot's position actually changes frame-to-frame \\
+Drone flight feel & Body bank (turning) and thrust-tilt (accelerating), composed via explicit quaternion multiplication rather than Euler angles, so the tilt axis stays attached to the drone's nose at any yaw \\
+Special moves & Dash (6$\times$-speed burst, 4\,s cooldown), Jump (parabolic arc, 5\,s cooldown, only without the ball), Flight (grab$\to$rise$\to$hold$\to$descend, rigid ball attachment throughout) \\
 Shot animation & Windup/release/recover arm pose, elbow coupled to camera pitch while aiming \\
-Time-of-Day transitions & 2.5\,s smoothstep cross-fade of every light/sky parameter between presets, running every frame independently of game mode so it stays visible while chosen from the menu \\
+Time-of-Day fades & 2.5\,s smoothstep cross-fade of every light/sky parameter, running every frame in any mode \\
+Ball spin & Derived each frame from real displacement (axis $= \hat{u} \times \vec{v}$, rate $= |\vec{v}|/r$), so spin is consistent across dribble/shot/handling/pickup with no per-state simulation \\
 \bottomrule
 \end{tabularx}
 \caption{Animated systems (non-exhaustive; static geometry is limited to the court and lamp posts).}
 \end{table}
 
-\subsection{Ball Realism}
+\paragraph{Why a fixed timestep.} The dribble is where integrating on the variable render \code{delta} produced a real bug: the ball's release velocity was estimated as a single-frame finite difference, and whenever a frame hitch landed exactly on the frame where the push easing saturates, the estimated velocity collapsed to nearly zero --- randomly --- and the ball dropped dead instead of bouncing. Advancing the simulation in fixed $1/120$\,s steps through an accumulator (a slow frame runs several steps, a fast one may run none) removes the pathological case and makes the trajectory deterministic regardless of frame rate.
 
-The ball's rotation is derived every frame from its \emph{real} frame-to-frame displacement (rolling axis $= \hat{u} \times \vec{v}$, angular speed $= |\vec{v}|/r$) rather than simulated separately for each of dribble/shot/handling/pickup, so spin is automatically consistent across every state the ball can be in.
+\paragraph{Third-person camera.} While dribbling, the Play camera is a classic orbit camera (mouse yaw/pitch around the robot, \code{lookAt} pinned on it, pitch clamped to $\sim$3--51\textdegree); while handling the ball (aiming), it switches to a true free orientation --- yaw/pitch drive \code{camera.quaternion} directly, decoupled from position --- allowing to look \emph{over} the robot toward the hoop, with an over-the-shoulder framing. Transitions between the two are always interpolated (position \code{lerp}, orientation quaternion \code{slerp}) toward a target recomputed every frame: the two formulas are structurally different, and switching without this layer produces a visible snap. The orbit yaw/pitch are deliberately \emph{not} reset when entering handling (an earlier version reset the pitch, making the crosshair jump away from the aimed point); the handling pitch range is a strict superset of the dribbling one, so the aim direction stays continuous with no clamping.
 
 % =============================================================================
-\section{Physics and Collisions}
+\section{Physics, Collisions and Scoring}
 \label{sec:physics}
 % =============================================================================
 
-No physics engine is used (Section~\ref{sec:assets}); every collision test is a hand-written closed-form formula:
+No physics engine is used; every collision test is a hand-written closed-form formula: \textbf{sphere vs.\ AABB} (ball vs.\ backboard/walls/poles/benches, and robot vs.\ static court geometry, so a Dash cannot push a robot through a wall) and \textbf{sphere vs.\ torus} (ball vs.\ rim). Both use the same reflection formula $\vec{v}' = \vec{v} - (1+e)(\vec{v}\cdot\hat{n})\hat{n}$, with a per-material restitution $e$ (backboard 0.15, rim 0.3, walls/poles 0.55, benches 0.5). The 66 wall/bleacher collision boxes are extracted mesh-by-mesh from the real court GLTF (not one aggregate box), since the venue has intentional gaps between panels that an aggregate would misrepresent.
 
-\begin{itemize}[nosep]
-    \item \textbf{Sphere vs.\ AABB} (ball vs.\ backboard/walls/poles/benches, and robot vs.\ static court geometry to keep a Dash from pushing a robot through a wall);
-    \item \textbf{Sphere vs.\ torus} (ball vs.\ the rim), used both for physical bounce response and, separately, for exact-crossing detection when scoring;
-    \item both use the same reflection formula $\vec{v}' = \vec{v} - (1+e)(\vec{v}\cdot\hat{n})\hat{n}$, with a different restitution coefficient $e$ per material (backboard 0.15, rim 0.3, walls/poles 0.55, benches 0.5).
-\end{itemize}
+Two robustness details: shot flight is sub-stepped at 240\,Hz because at full shot speed a single frame can move the ball farther than the backboard is thick (tunnelling); and post-bounce collision cooldowns are tracked \emph{per object}, because a single global cooldown after a rim bounce would suspend the backboard check at exactly the moment the deflected ball reaches it.
 
-The 66 wall/bleacher collision boxes are extracted mesh-by-mesh from the real court GLTF (not a single aggregate bounding box), since the venue's geometry has intentional gaps between panels that an aggregate box would either ignore or over-approximate.
+A ``hoop assist'' potential field gently pulls an airborne shot toward the rim center, with strength scaled by the shooter's \verb|shooting| stat. It is a clamped \emph{position} correction rather than an acceleration: an acceleration accumulates with time spent in the assist cone, so slow close-range shots were flung \emph{past} the rim --- a position pull clamped at the center cannot overshoot by construction.
 
-A ``hoop assist'' potential field (position correction, not a velocity kick, to avoid overshooting the rim on slow close-range shots) gently pulls the ball toward the center of the rim while a shot is airborne near the basket, with strength scaled by the shooting robot's \verb|shooting| stat.
+\textbf{Scoring}: 2 points if the shooter was inside the three-point arc \emph{at the moment of release}, 3 otherwise; the arc radius is read from the court GLTF's real accessor data. A basket is detected by interpolating the exact crossing point of the rim's plane between two consecutive physics samples --- testing only the sample already past the plane misses steep, close-range shots that genuinely went in.
 
 % =============================================================================
 \section{Audio}
 \label{sec:audio}
 % =============================================================================
 
-All sound effects are synthesized at runtime with the Web Audio API (oscillators and filtered white noise) --- no audio file is downloaded or shipped with the project, mirroring the ``no external assets'' approach used for the robot textures.
-
-\begin{table}[h!]
-\centering
-\begin{tabularx}{\textwidth}{l X}
-\toprule
-\textbf{Sound} & \textbf{Synthesis} \\
-\midrule
-Score & Two ascending sine-wave notes (a fifth apart) \\
-Bounce & A low sine ``body'' tone sweeping downward, plus a short low-pass-filtered noise ``contact'' transient \\
-Shoot & Band-pass filtered white noise, center frequency sweeping upward (a rising ``whoosh'') \\
-Steal & The same band-pass sweep technique, frequency sweeping \emph{downward} and much shorter (a sharp ``swipe'') \\
-Block & Low-pass noise (a sharp hit) plus a descending low tone underneath \\
-\bottomrule
-\end{tabularx}
-\caption{Synthesized sound effects.}
-\end{table}
-
-A background music loop is not yet implemented; see Section~\ref{sec:limitations}.
+All five sound effects are synthesized at runtime with the Web Audio API --- no audio file is shipped: \textbf{score} (two ascending sine notes, a fifth apart), \textbf{bounce} (a low downward-sweeping tone plus a short low-pass noise transient), \textbf{shoot} (band-pass filtered white noise sweeping upward --- a rising ``whoosh''), \textbf{steal} (the same band-pass technique sweeping \emph{downward}, much shorter --- a ``swipe''), and \textbf{block} (low-pass noise hit over a descending low tone). Each has a short linear attack before its exponential decay --- an instantaneous jump to peak gain produces an audible click. A background music loop is not yet implemented (Section~\ref{sec:conclusions}).
 
 % =============================================================================
 \section{User Interaction and Controls}
 \label{sec:interaction}
 % =============================================================================
 
-\subsection{Main Menu Flow}
+The Main Menu (pure HTML/CSS overlaid on the canvas) walks through \textsc{Gamemodes} $\rightarrow$ \textsc{Robot} selection (a second ``Robot Opponent'' screen appears only in 1v1) $\rightarrow$ \textsc{Time of Day} + \textsc{Start}. All three robot classes are instantiated (hidden) at page load, so switching class is a visibility toggle, never a page reload. The selection cards run the \emph{same} dribble state machine as the real game on a live offscreen renderer --- the preview robot genuinely dribbles, no pre-rendered screenshot.
 
-The Main Menu (pure HTML/CSS overlaid on the canvas, no Three.js involved in the menu chrome itself) walks through: \textsc{Gamemodes} (Practice/1v1) $\rightarrow$ \textsc{Robot} selection (3 cards, each with a live-dribbling 3D preview and stat bars; a second ``Robot Opponent'' screen appears only in 1v1) $\rightarrow$ \textsc{Time of Day} (4 cards, animated preview behind the menu) with a \textsc{Start} button on the same screen. All three robot classes are instantiated (hidden) at page load, so switching the selected class is only a visibility toggle and reference reassignment, never a page reload.
-
-\subsection{Controls}
-
-\begin{table}[h!]
+\begin{table}[htbp]
 \centering
+\small
 \begin{tabularx}{\textwidth}{l X}
 \toprule
 \textbf{Input} & \textbf{Effect} \\
@@ -371,11 +255,10 @@ The Main Menu (pure HTML/CSS overlaid on the canvas, no Three.js involved in the
 Mouse (Play) & Orbits the camera around the robot; aims the arm \\
 \code{WASD} (Play) & Move relative to camera facing; wheels/legs steer toward the movement direction \\
 Left Shift (Play) & Special move for the active class (Dash / Jump / Flight) \\
-Right mouse, held (Play) & \code{HANDLING} state --- pauses the automatic dribble, frees the camera to aim toward the hoop \\
-Left click (while \code{HANDLING}) & Shoot, direction from a raycast through the crosshair, constant force (halved inside the three-point arc) \\
+Right mouse, held (Play) & \code{HANDLING} state --- pauses the dribble, frees the camera to aim toward the hoop \\
+Left click (\code{HANDLING}) & Shoot; direction from a raycast through the crosshair, constant launch speed, reduced to 60\% inside the three-point arc \\
 Walk near a loose ball & Automatic pickup, no key required \\
-\code{Q} (1v1, no ball) & Steal --- a sweep toward the opponent \\
-\code{E} (1v1, no ball) & Block --- deflects a shot in flight \\
+\code{Q} / \code{E} (1v1, no ball) & Steal (sweep toward the opponent) / Block (deflects a shot in flight) \\
 \code{Esc} (Play) & Pause menu \\
 \code{1--8} & Toggle collision/contact wireframe overlays (backboard, rim, walls, poles, benches, steal zone, block radius, pickup zone) \\
 \bottomrule
@@ -383,14 +266,13 @@ Walk near a loose ball & Automatic pickup, no key required \\
 \caption{Full control scheme.}
 \end{table}
 
-\subsection{Debug Tooling}
+Shot direction comes from a raycast through the crosshair pixel, and shot \emph{strength} is deliberately constant rather than charge-based: varying the force at aim time would change the previewed trajectory while lining it up. Instead, a live trajectory preview (a 3D tube rebuilt every frame from the same physics as the real flight, collisions included) shows exactly where the shot will go, turning green when the simulated path crosses the hoop.
 
-Beyond the gameplay controls, an in-page debug panel (key \code{P}) exposes every tunable parameter of the active robot's geometry (link lengths/thicknesses/scales) and of the gameplay systems (dribble/shoot/handling timing constants) as live sliders, plus a ``Copy Config'' button that serializes the current geometry state to the clipboard. A separate ``Animation Preview'' section lets any pose (Dribble/Handling/Shoot/Special Move) be forced and inspected from a free Spectate camera angle, which is otherwise impossible for \code{HANDLING} (normally reachable only while holding the right mouse button, with the camera locked to the robot).
+Beyond gameplay controls, the debug panel (key \code{P}) exposes every tunable parameter --- robot geometry and gameplay timing constants --- as live sliders, plus a ``Copy Config'' button that serializes the current geometry to the clipboard: the shipped default dimensions of all three robots were tuned visually this way and pasted back as code. An ``Animation Preview'' section can force any pose (Dribble/Handling/Shoot/Special Move) for inspection from a free camera angle.
 
-\begin{figure}[h!]
+\begin{figure}[htbp]
 \centering
-% TODO: screenshot of the debug panel (key P) open during gameplay, showing sliders
-\fbox{\parbox{0.9\textwidth}{\centering\vspace{3em}\textcolor{red}{TODO: figure --- debug panel open, showing per-component sliders}\vspace{3em}}}
+\figplaceholder{debug panel open, showing per-component sliders}
 \caption{The debug panel, used to tune every robot's geometry live.}
 \end{figure}
 
@@ -399,36 +281,42 @@ Beyond the gameplay controls, an in-page debug panel (key \code{P}) exposes ever
 \label{sec:ai}
 % =============================================================================
 
-The opponent robot in 1v1 mode is driven by a small tactical finite-state machine, \code{EnemyState} $\in$ \{\code{CHASE\_BALL}, \code{ATTACK}, \code{DEFEND}\}, recomputed every frame from who currently possesses the ball (not sticky): it chases a loose ball, attacks toward its own hoop and shoots once in range when it has possession, and otherwise positions itself between the player and the player's hoop while attempting a Steal or Block. Shot elevation for the AI is solved with the standard ballistic-projectile equation given a fixed launch speed, falling back to a 50\textdegree{} arc if the target is unreachable at that speed.
+The opponent is driven by a small tactical finite-state machine, \code{EnemyState} $\in$ \{\code{CHASE\_BALL}, \code{ATTACK}, \code{DEFEND}\}, recomputed every frame from who currently possesses the ball: it chases a loose ball, attacks toward its hoop and shoots once in range, and otherwise positions itself between the player and the player's hoop while attempting a Steal or Block. AI shot elevation is solved with the standard ballistic-projectile equation at fixed launch speed, falling back to a 50\textdegree{} arc if the target is unreachable.
 
-\textsc{Steal} and \textsc{Block} are shared between the human player and the AI through a single module (\code{CombatMoves.js}): a reach/sweep animation, a real bounding-box contact test (asymmetric for Steal --- a wide margin in front of the sweeping robot, almost none behind it, so a Steal cannot succeed by walking up behind an opponent), and a resolve step that re-validates possession \emph{at the end} of the sweep rather than at first contact.
-
-Robot-vs-robot overlap is resolved with an asymmetric position correction based on ball possession: the robot currently holding the ball yields only 25\% of the separation distance, the other robot yields 75\% --- ``the one walking into someone gives way'', not a symmetric push-apart.
+\textsc{Steal} and \textsc{Block} are shared between player and AI through a single module: a reach/sweep animation, a real bounding-box contact test (asymmetric for Steal --- wide margin in front of the sweeping robot, almost none behind, so a Steal cannot succeed from behind), and a resolve step that re-validates possession \emph{at the end} of the sweep rather than at first contact. Robot-vs-robot overlap is resolved with a possession-based asymmetric position correction (the ball holder yields 25\% of the separation, the other robot 75\%); a robot mid-shot is never displaced at all, because its position also drives the chase camera and being nudged during release made the crosshair slide at the exact moment of the shot.
 
 % =============================================================================
-\section{Point System}
+\section{Conclusions and Limitations}
+\label{sec:conclusions}
 % =============================================================================
 
-A shot is worth 2 points if the shooter's position was inside the three-point arc \emph{at the moment of release}, 3 otherwise; the arc radius is read directly from the court GLTF's real accessor data rather than an estimated constant. Scoring itself is detected by interpolating the exact crossing point of the rim's plane between two consecutive physics samples (not just testing the sample already past the plane), which matters most for steep, close-range shots where a single coarse sample can miss a shot that genuinely went in.
+Table~\ref{tab:requirements} maps the course's mandatory requirements onto the sections of this report.
 
-% =============================================================================
-\section{Known Limitations and Future Work}
-\label{sec:limitations}
-% =============================================================================
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{4.1cm} X l}
+\toprule
+\textbf{Requirement} & \textbf{Where it is satisfied} & \textbf{Section} \\
+\midrule
+Hierarchical model with structural animation & Three procedural robots, each a nested-\code{Group} hierarchy (locomotion base $\rightarrow$ 3R arm $\rightarrow$ paddle); steering, aiming, dribbling and the special moves all animate \emph{through} the hierarchy & \S\ref{sec:models} \\
+At least one light & 1 hemisphere + 1 directional (shadowed) + 4 point + 2 spot, all driven by the Time-of-Day presets & \S\ref{sec:materials} \\
+Textures of two different kinds & Ball: color + normal + metalness/roughness maps; robots/benches/lamps: procedurally generated normal/roughness/bump maps & \S\ref{sec:materials} \\
+Real user interaction & Full match controls (move/aim/dribble/shoot/steal/block), Main Menu with robot/game-mode/time-of-day selection, pause and options & \S\ref{sec:interaction} \\
+Most objects animated, all in JavaScript & Every robot, the ball, the shot, the sky and the lights are animated imperatively in the render loop; nothing imported & \S\ref{sec:animation} \\
+\bottomrule
+\end{tabularx}
+\caption{Coverage of the course's mandatory requirements.}
+\label{tab:requirements}
+\end{table}
 
-\begin{itemize}
-    \item \textbf{3v3 mode}: part of the original concept, never implemented; out of the final scope.
-    \item \textbf{Background music}: only short synthesized sound effects exist (Section~\ref{sec:audio}); a looping background track (menu and in-match, with a crossfade between the two) is planned but not yet implemented.
-    \item \textbf{Robot color customization}: implemented (Main Menu $\rightarrow$ ROBOT $\rightarrow$ ``Customize'', team-wide color for the player's robot only), but intentionally does not persist across a page refresh --- it lives in an in-memory variable for the current session only.
-    \item \textcolor{red}{TODO: GitHub Pages deployment --- \code{base: './'} is already configured in \code{vite.config.js}, but the project has not yet been deployed; the live link above needs to be filled in once it is, and the same link added to the repository's \code{README.md}.}
-    \item \textcolor{red}{TODO: final polish pass and any last-minute animation tweaks, to be filled in closer to submission.}
-    \item \textcolor{red}{TODO: personal conclusions / retrospective on the project, in the student's own words.}
+Beyond the requirements, the two choices that shaped the project most were building \emph{everything} procedurally (robots, textures, skybox, sounds --- only the court and ball are external) and simulating on fixed timesteps decoupled from the render rate, which made both the dribble and the shot deterministic and debuggable. The recurring engineering lesson, met independently in the shadow setup, the SSAO configuration and the light intensities, is that a graphics library's physically-motivated defaults silently assume a scene scale --- importing an asset with different units means re-deriving every such parameter rather than tuning it blindly.
+
+Known limitations: there is no 3v3 mode; there is no background music (only the synthesized SFX of Section~\ref{sec:audio}); robot color customization intentionally does not persist across a page refresh (in-memory, session only).
+
+\begin{itemize}[nosep]
+    \item \todo{GitHub Pages deployment --- \code{base: './'} is already configured, but the project is not deployed yet; once it is, fill in the live link on the title page and in the repository's \code{README.md}.}
+    \item \todo{personal conclusions / retrospective on the project, in the student's own words.}
 \end{itemize}
-
-% =============================================================================
-\section{Conclusion}
-% =============================================================================
-
-\textcolor{red}{TODO: closing summary --- once Sections~\ref{sec:limitations}'s open items are resolved, summarize here what was learned/achieved, referencing back to the course's four mandatory requirements (hierarchical models, lights and textures, user interaction, animation) and how each is satisfied by the sections above.}
 
 \end{document}
