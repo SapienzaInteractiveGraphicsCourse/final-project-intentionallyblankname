@@ -1,10 +1,10 @@
-import * as THREE from 'three'
+﻿import * as THREE from 'three'
 import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { clampOrbitPitchToNormalRange, dribbleAmplitudesRad, getObjectWorldPosition, paddleWorldPos } from './BallPossession.js'
 import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from '../utils/constants.js'
 
-// Shooting, hoop assist, scoring and trajectory preview — kept together
+// Shooting, hoop assist, scoring and trajectory preview, kept together
 // because they share isHoopCrossing/applyHoopAssist/collisionWorld.hoops
 // too tightly to split. Context-object pattern, zero imports from main.js.
 
@@ -19,14 +19,14 @@ const THREE_POINT_SPEED_REDUCTION = 0.6 // 60% launch speed inside the arc: clos
 // Hoop-assist cone (SHOOTING stat): rim radius exactly at rim level,
 // widening up to the top of the backboard
 const HOOP_ASSIST_TOP_RADIUS = 90
-// Correction rate (1/s). POSITION correction, not an acceleration — an
+// Correction rate (1/s). POSITION correction, not an acceleration, an
 // acceleration accumulates with time spent in the cone and overshot the
 // center on slow close-range shots
 const HOOP_ASSIST_PULL_RATE = 4
 // Fine enough not to tunnel through the thin backboard at max shot speed
 const SHOT_PHYSICS_SUBSTEP_DT = 1 / 240
 const SHOOT_EASE = t => t * t * (3 - 2 * t) // smoothstep
-const TRAJECTORY_DT = 0.005 // as fine as the real flight — 0.02 was too coarse
+const TRAJECTORY_DT = 0.005 // as fine as the real flight, 0.02 was too coarse
 const TRAJECTORY_MAX_STEPS = 2400 // ~12s at this dt
 const TRAJECTORY_TUBE_RADIUS = 4
 const TRAJ_COLOR_BLACK = 0x111111
@@ -83,8 +83,8 @@ function applyHoopAssist(position, velocity, dt, strength, hoops, backboardTopY,
   }
 }
 
-// SHOOTING 1-3: 1 = no correction, 2/3 = progressively stronger —
-// quadratic fit over the historical values: (stat-1)(stat+4)/8
+// SHOOTING 1-3: 1 = no correction, 2/3 = progressively stronger.
+// Quadratic fit over the historical values: (stat-1)(stat+4)/8
 export function shootingStatToAssistStrength(shootingStat) {
   return (shootingStat - 1) * (shootingStat + 4) / 8
 }
@@ -100,16 +100,16 @@ export function initShootingSystem(ctx)
     // no restriction); in 1V1 each robot has ITS hoop. Read fresh because
     // gameMode may not be decided yet at init time
     getTargetHoopIndex = () => null,
-    // Called with THIS manipulator on every made basket — main.js uses it
+    // Called with THIS manipulator on every made basket, main.js uses it
     // for the 1V1 possession turnover; no-op in PRACTICE
     onScore = () => {},
   } = ctx
   // getBasketball is NOT destructured: it must be called fresh each time
   // (basketball is assigned asynchronously on GLTF load). A function, not
-  // a getter, because ctx comes from a spread — a getter would be
+  // a getter, because ctx comes from a spread, a getter would be
   // evaluated at spread time, freezing null forever.
   // getShotDirection/computeAimPitchOffset come from outside: crosshair/
-  // camera for the player, AI aim for the enemy — this module doesn't care
+  // camera for the player, AI aim for the enemy, this module doesn't care
 
   const shotFloorBounceSpeed = BALL_BOUNCE_SPEED * SHOT_FLOOR_BOUNCE_SPEED_FACTOR
 
@@ -129,7 +129,7 @@ export function initShootingSystem(ctx)
     return isInsideThreePointArc(worldPosition, hoopsForArcCheck()) ? shotSpeed * THREE_POINT_SPEED_REDUCTION : shotSpeed
   }
 
-  // Point System: 2 points from inside the arc, 3 from outside —
+  // Point System: 2 points from inside the arc, 3 from outside.
   // wasInsideArc captured at RELEASE, not where the ball lands
   let score = 0
   // 'score-value' (player) or 'enemy-score-value': two separate counters
@@ -163,13 +163,13 @@ export function initShootingSystem(ctx)
     }
   }
 
-  // Per-object post-hit cooldowns — see CollisionWorld.js for the why
+  // Per-object post-hit cooldowns, see CollisionWorld.js for the why
   const shotCollisionCooldowns = new Map()
   function clearAllCollisionCooldowns() {
     shotCollisionCooldowns.clear()
   }
 
-  // Start the shot windup — shared by player mousedown and EnemyAI.
+  // Start the shot windup, shared by player mousedown and EnemyAI.
   // Preconditions stay with the callers (genuinely different conditions)
   function triggerShoot() {
     const manipulator = getManipulator()
@@ -186,7 +186,7 @@ export function initShootingSystem(ctx)
     clearAllCollisionCooldowns()
     // Freeze the EXACT point the preview was drawing from at click time:
     // windup/release drag the ball with the arm, so without this the real
-    // flight started from where the paddle ended up AFTER the windup —
+    // flight started from where the paddle ended up AFTER the windup:
     // "green" preview but the shot missed
     const ball = ctx.getBasketball()
     if (ball) shootingState.releaseOrigin.copy(ball.position)
@@ -208,7 +208,7 @@ export function initShootingSystem(ctx)
     )
 
     // Score is judged on the PURE ballistic path, before any collision
-    // deflection in this same step — same order the preview uses
+    // deflection in this same step, same order the preview uses
     checkHoopScore(scratchPreviousShotPos, ball.position)
     const hitVisible = collisionWorld.resolve(ball.position, shotVelocity, dt, shotCollisionCooldowns, ballRadius)
     if (hitVisible) sfx.playBounce()
@@ -225,7 +225,7 @@ export function initShootingSystem(ctx)
     }
 
     // FIRST FLOOR touch only (rim/backboard hits don't count): until then
-    // the shot stays FREE_SHOT — blockable, not pickable
+    // the shot stays FREE_SHOT, blockable, not pickable
     if (!shootingState.hasBounced && hitFloor) {
       shootingState.hasBounced = true
       ball.setState(BallState.FREE)
@@ -241,7 +241,7 @@ export function initShootingSystem(ctx)
 
   // Shot animation: elbow tracks camera pitch every frame; 'windup' pulls
   // elbow/link1 back, 'release' snaps them forward (elbow starts late and
-  // covers its full range in less time — the whip effect), 'recover'
+  // covers its full range in less time, the whip effect), 'recover'
   // returns to neutral. elevatedShootTuning replaces shootTuning while
   // the Drone is airborne (the grounded pose would clip the body)
   function resolveShootTuning(manipulator) {
@@ -259,7 +259,7 @@ export function initShootingSystem(ctx)
     const aimPitchOffset = computeAimPitchOffset()
 
     // Countdown ALWAYS active, not only inside the 'release' branch: the
-    // phase can move on to 'recover' with the timer still mid-way — if it
+    // phase can move on to 'recover' with the timer still mid-way, if it
     // lived only in that branch, NO_BALL would never fire
     if (shootingState.released && shootingState.stateTransitionTimer > 0) {
       shootingState.stateTransitionTimer -= delta
@@ -285,7 +285,7 @@ export function initShootingSystem(ctx)
       const t = Math.min(shootingState.phaseT / shootTuning.releaseDuration, 1)
       const easeT = SHOOT_EASE(t)
       const link1Offset = THREE.MathUtils.lerp(link1WindupTarget, THREE.MathUtils.degToRad(shootTuning.link1ReleaseDeg), easeT)
-      // Elbow starts late, covers its full range in the remaining time —
+      // Elbow starts late, covers its full range in the remaining time:
       // higher angular speed, the whip effect
       const elbowT = SHOOT_EASE(THREE.MathUtils.clamp((t - shootTuning.releaseLead) / (1 - shootTuning.releaseLead), 0, 1))
       const elbowOffset = THREE.MathUtils.lerp(elbowWindupTarget, THREE.MathUtils.degToRad(shootTuning.elbowReleaseDeg), elbowT)
@@ -306,7 +306,7 @@ export function initShootingSystem(ctx)
         sfx.playShoot()
         // NOT setState(NO_BALL) here: that would detach the free HANDLING
         // camera the same instant the ball leaves the hand, making the
-        // crosshair jump — the real state change fires after the delay
+        // crosshair jump, the real state change fires after the delay
         shootingState.stateTransitionTimer = shootTuning.stateTransitionDelay
       }
       if (shootingState.phaseT >= shootTuning.releaseDuration) {
@@ -329,13 +329,13 @@ export function initShootingSystem(ctx)
 
       if (shootingState.phaseT >= shootTuning.recoverDuration) {
         shootingState.phase = 'idle'
-        // Reset armEase only NOW that the visual pose is already at 0 —
+        // Reset armEase only NOW that the visual pose is already at 0:
         // no snap, armEase=0 reproduces the exact pose just reached
         dribbleState.armEase = 0
       }
     }
 
-    // Until physical release the ball stays on the paddle — rigidly for
+    // Until physical release the ball stays on the paddle, rigidly for
     // most of the animation, converging toward the frozen releaseOrigin
     // only in the last slice (past BLEND_START_FRACTION) so the real
     // flight starts exactly where the preview drew it. An early version
@@ -357,7 +357,7 @@ export function initShootingSystem(ctx)
   let trajectoryColoredMesh = null
 
   // Rebuild (dispose + new, TubeGeometry can't update in place) the tube
-  // mesh for a point run — null if fewer than 2 points
+  // mesh for a point run, null if fewer than 2 points
   function rebuildTrajectoryTube(existingMesh, points, material) {
     if (existingMesh) {
       scene.remove(existingMesh)
@@ -386,13 +386,13 @@ export function initShootingSystem(ctx)
   // Diagnostics for the debug panel (key P)
   const trajDebug = { count: 0, stopReason: '—' }
   // Reused scratch (runs every frame while aiming, up to MAX_STEPS each):
-  // cooldown Map cleared, not recreated — SEPARATE from the real flight's
+  // cooldown Map cleared, not recreated, SEPARATE from the real flight's
   const previewScratchPreviousPos = new THREE.Vector3()
   const previewCollisionCooldowns = new Map()
 
   function updateTrajectoryPreview() {
     const manipulator = getManipulator()
-    // Uses the CURRENT aim pose — simulating the exact release pose was
+    // Uses the CURRENT aim pose, simulating the exact release pose was
     // tried and discarded (unnatural origin at low/side aim)
     trajPos.copy(ctx.getBasketball().position)
     getShotDirection(trajVel).multiplyScalar(getEffectiveShotSpeed(manipulator.root.position))
@@ -448,8 +448,8 @@ export function initShootingSystem(ctx)
         trajColoredPoints.push(trajPos.clone())
       }
 
-      if (hitFloor) { trajDebug.stopReason = 'pavimento'; break }
-      if (i === TRAJECTORY_MAX_STEPS - 1) trajDebug.stopReason = 'budget esaurito (mai toccato nulla)'
+      if (hitFloor) { trajDebug.stopReason = 'floor'; break }
+      if (i === TRAJECTORY_MAX_STEPS - 1) trajDebug.stopReason = 'step budget exhausted (no hit)'
     }
     trajDebug.count = trajBlackPoints.length + trajColoredPoints.length
 
@@ -463,8 +463,8 @@ export function initShootingSystem(ctx)
     addScore, resetScore, checkHoopScore, clearAllCollisionCooldowns, triggerShoot,
     updateShotFlight, updateShootAnimation, updateTrajectoryPreview, hideTrajectoryPreview,
     shotVelocity, trajDebug,
-    // Read by main.js after each onScore for the 1V1 win check —
-    // a function so it's always current, never a frozen snapshot
+    // Read by main.js after each onScore for the 1V1 win check.
+    // A function so it's always current, never a frozen snapshot
     getScore: () => score,
   }
 }

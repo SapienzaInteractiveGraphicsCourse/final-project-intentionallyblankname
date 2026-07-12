@@ -2,33 +2,16 @@ import { GameMode, TimeOfDay } from '../SharedEnums.js'
 import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from '../gameplay/Basketball.js'
 
-// Esperimento di split "alla isometric_racer" (vedi README → "Confronto
-// con Altri Progetti"/ricerca su cross-module state sharing): invece di
-// importare stato "vivo" da main.js (rischio di dipendenze circolari —
-// main.js dovrebbe importare da qui, qui da main.js), questo modulo
-// riceve TUTTO ciò che gli serve come un unico oggetto context passato a
-// initMainMenu(), stesso principio del ctx di isometric_racer. Nessun
-// import da main.js: zero dipendenza circolare. RobotState/BallState
-// importati direttamente qui (sono foglie, nessun rischio circolare) —
-// diverso da GameMode/TimeOfDay solo per dove main.js li usa anche altrove.
+// Menu screens, pause, gameplay reset. Context-object pattern, zero
+// imports from main.js. renderRobotCardPreview/stat bars deliberately
+// stay in main.js (they depend on stepDribble and would recreate the
+// circular dependency this split avoids). startTimeOfDayTransition is a
+// callback in the context: this module never needs to know how
+// lights/sky work inside.
 //
-// Cosa NON è stato spostato qui (deliberatamente): renderRobotCardPreview/
-// stat bar restano in main.js perché dipendono da stepDribble e dagli
-// helper angleToForward/rotateRight — importarli qui creerebbe la stessa
-// dipendenza circolare che questo split vuole evitare. startTimeOfDayTransition
-// resta una CALLBACK nel context (usata dal click sulla card — sempre un fade
-// animato, mai uno scatto secco) — questo modulo non deve sapere come
-// funziona dentro (luci, Sky, transizione: tutto vive in main.js).
-// applyTimeOfDayPreset (lo scatto istantaneo, usato solo al primissimo avvio
-// pagina) resta invece interna a main.js, non passa da qui.
-//
-// ctx.getBasketball() è una funzione, non un valore semplice: main.js
-// assegna basketball in modo asincrono al caricamento del GLTF, quindi al
-// momento in cui initMainMenu() viene chiamato è ancora null — un valore
-// catturato lì per lì resterebbe null per sempre. La funzione legge il
-// valore CORRENTE ad ogni chiamata (non un accessor `get`: ctx nasce da uno
-// spread di gameContext in main.js, che valuterebbe subito un accessor e ne
-// congelerebbe il risultato — vedi il commento su gameContext in main.js)
+// ctx.getBasketball() is a function, not a value: basketball is assigned
+// asynchronously on GLTF load (null at init time). Not a `get` accessor:
+// ctx comes from a spread, which would freeze the accessor's result
 export function initMainMenu(ctx) {
   const {
     menuOverlayEl, hint, dashPanel, combatPanel, crosshair, modeIndicator,
@@ -46,26 +29,15 @@ export function initMainMenu(ctx) {
     setActiveRobotClass, setActiveEnemyRobotClass,
   } = ctx
 
-  // "lati" del campo: canestri reali a X≈±1080 (CollisionWorld.js) — a metà
-  // strada verso il centro, non alla linea di fondo: una nuova partita
-  // parte a distanza di palleggio, non già sotto canestro
+  // Spawns halfway to center (hoops at X≈±1080): a new game starts at
+  // dribbling distance, not under the basket
   const PLAYER_SPAWN_X = -300
   const ENEMY_SPAWN_X = 300
 
-  // BACK TO MAIN MENU deve riportare a una partita davvero pulita, non solo
-  // azzerare il punteggio — altrimenti una nuova PRACTICE iniziava con 0
-  // punti ma il robot dove lo si era lasciato fisicamente sul campo,
-  // ancora a metà tiro/palleggio/dash. Riporta ogni pezzo di stato
-  // transitorio (non gameMode/timeOfDay: quelli restano l'ultima scelta,
-  // si ricambiano rifacendo il flusso se serve) alla stessa condizione di
-  // un ingresso a freddo in Play
-  // Reset di tiro/handling/pickup/STEAL/BLOCK per UN robot a una condizione
-  // pulita — prima duplicato a mano per giocatore/nemico dentro
-  // resetGameplayState (stessi ~19 campi, differivano solo nel prefisso
-  // enemy*). Non copre posizione/camera/dash/aimYaw: quei pezzi divergono
-  // per davvero tra giocatore e nemico (camera orbitale solo-giocatore,
-  // dash solo-giocatore, l'IA nemica ha un proprio setAimYaw esplicito),
-  // non solo nei nomi — restano scritti a mano in resetGameplayState sotto
+  // Shot/handling/pickup/STEAL/BLOCK reset for ONE robot, previously
+  // duplicated by hand for player/enemy (same ~19 fields, enemy* prefix).
+  // Position/camera/dash/aimYaw are NOT here: those genuinely differ
+  // between the two sides and stay in resetGameplayState below
   function resetCombatAndShotState(robot, s) {
     s.resetDribbleState()
     s.clearAllCollisionCooldowns()
@@ -96,10 +68,11 @@ export function initMainMenu(ctx) {
     robot.controls.setDribbleOffsets(0, 0)
   }
 
-  // ballOwner: di default il giocatore (comportamento storico, invariato
-  // per BACK TO MAIN MENU) — parametrizzato per riuso dal turnover di
-  // possesso dopo un canestro/palla fuori campo in 1V1 (main.js), dove deve
-  // andare a chi ha SUBITO il canestro/l'ha persa, non sempre al giocatore
+  // Full transient-state reset, equivalent to a cold entry into Play
+  // (score alone was not enough: robots stayed mid-shot/dribble/dash).
+  // gameMode/timeOfDay keep the last choice. ballOwner defaults to the
+  // player (BACK TO MAIN MENU); the 1V1 possession turnover (main.js)
+  // passes whoever conceded the basket/lost the ball
   function resetGameplayState(ballOwner) {
     const manipulator = getManipulator()
     const enemyManipulator = getEnemyManipulator()
@@ -107,17 +80,15 @@ export function initMainMenu(ctx) {
     const otherOwner = ballOwner === manipulator ? enemyManipulator : manipulator
     manipulator.root.position.set(PLAYER_SPAWN_X, 0, 0)
     movementState.facing = 0
-    manipulator.locomotionYaw = -Math.PI / 2 // combacia col valore iniziale impostato dal costruttore di RobotBase
+    manipulator.locomotionYaw = -Math.PI / 2 // matches the RobotBase constructor initial value
     manipulator.controls.setWheelsYaw(manipulator.locomotionYaw)
     cameraState.orbitYaw = 0
     cameraState.orbitPitch = ORBIT_PITCH_REST
 
     ballOwner.setState(RobotState.DRIBBLE)
     otherOwner.setState(RobotState.NO_BALL)
-    // palla riassegnata a ballOwner: la sua posizione segue comunque
-    // sempre la paletta del possessore (vedi stepDribble), "al centro"
-    // vero conterebbe solo per una palla senza owner — qui basta che
-    // riparta da chi la possiede, non da dove l'ultima partita l'ha lasciata
+    // Ball position always follows the owner's paddle (stepDribble), so
+    // reassigning the owner is enough
     const ball = ctx.getBasketball()
     if (ball) {
       ball.setState(BallState.HANDLED)
@@ -132,20 +103,15 @@ export function initMainMenu(ctx) {
     dashState.rechargeTimer = 0
     dashState.timeRemaining = 0
 
-    // nemico: stesso reset di posizione/orientamento dal proprio lato di
-    // campo — altrimenti BACK TO MAIN MENU → PRACTICE riparte con l'IA a
-    // metà tiro/palleggio di prima, o dalla parte sbagliata di campo
+    // Enemy: same position/orientation reset on its own side
     enemyManipulator.root.position.set(ENEMY_SPAWN_X, 0, 0)
     enemyManipulator.controls.setWheelsYaw(-Math.PI / 2)
-    // risincronizza la copia locale di EnemyAI.js (mantenuta per
-    // interpolare fluidamente, non la sorgente di verità) — senza,
-    // restava al valore di prima del reset e il prossimo lerpAngle
-    // faceva scivolare visibilmente le ruote da lì invece di ripartire pulite
+    // Resync EnemyAI's locomotionYaw copy, else the next lerp visibly
+    // slides the wheels from the stale value
     resetEnemyWheelsAngle(-Math.PI / 2)
     enemyManipulator.controls.setAimYaw(-Math.PI / 2)
-    // stato già impostato sopra (ballOwner/otherOwner) — non risovrascrivere
-    // qui a NO_BALL fisso: se ballOwner è l'ENEMY (turnover di possesso)
-    // deve restare DRIBBLE
+    // Robot states already set above (ballOwner/otherOwner): do not force
+    // NO_BALL here, on a turnover the enemy may be the new owner
     resetCombatAndShotState(enemyManipulator, {
       shootingState: enemyShootingState, shotVelocity: enemyShotVelocity, handlingState: enemyHandlingState,
       pickupState: enemyPickupState, stealState: enemyStealState, blockState: enemyBlockState,
@@ -158,16 +124,11 @@ export function initMainMenu(ctx) {
 
   function showMenuScreen(id) {
     document.querySelectorAll('.menu-screen').forEach(el => el.classList.toggle('active', el.id === id))
-    // l'anteprima robot (canvas live, palleggio animato) anima solo mentre
-    // la sua card è davvero visibile — niente sprecato sulle altre schermate.
-    // Due flag separati (non uno solo): con un flag unico per entrambe le
-    // schermate ROBOT/ROBOT AVVERSARIO, la preview NON visibile avrebbe
-    // comunque continuato a renderizzare in background ogni volta che
-    // l'altra è quella davvero mostrata
+    // Card previews (live canvas, animated dribble) render only while
+    // their screen is the visible one. Separate flags per screen: a
+    // single shared flag kept the hidden screen's previews rendering
     menuState.robotPreviewActive = (id === 'menu-robot')
     menuState.enemyRobotPreviewActive = (id === 'menu-robot-enemy')
-    // stessa logica per le card LEGGED MANIPULATOR/DRONE (ancora "Coming
-    // Soon", ma con una vera anteprima 3D dal vivo — vedi main.js)
     menuState.leggedRobotPreviewActive = (id === 'menu-robot')
     menuState.enemyLeggedRobotPreviewActive = (id === 'menu-robot-enemy')
     menuState.droneRobotPreviewActive = (id === 'menu-robot')
@@ -177,9 +138,8 @@ export function initMainMenu(ctx) {
     el.addEventListener('click', () => showMenuScreen(el.dataset.goto))
   })
 
-  // OPTIONS è raggiungibile sia dal main menu (menu-main) sia dalla pausa in
-  // partita (menu-pause) — il tasto indietro deve tornare da dove si è
-  // entrati, non sempre allo stesso posto fisso
+  // OPTIONS is reachable from both the main menu and the pause menu: the
+  // back button returns to wherever it was entered from
   menuState.optionsReturnScreen = 'menu-main'
   document.querySelectorAll('[data-goto-options-from]').forEach(el => {
     el.addEventListener('click', () => {
@@ -189,38 +149,31 @@ export function initMainMenu(ctx) {
   })
   document.getElementById('menu-options-back-btn').addEventListener('click', () => showMenuScreen(menuState.optionsReturnScreen))
 
-  // --- Pausa in partita (ESC) ---
-  // idempotente (guardia su mode==='menu') perché ci sono DUE modi in cui
-  // arriva: (1) il keydown Escape in main.js, se il pointer non era già
-  // agganciato; (2) l'evento 'unlock' in main.js, se lo era — col pointer
-  // agganciato il browser stesso intercetta Esc per sganciarlo PRIMA che il
-  // keydown arrivi alla pagina (comportamento nativo della Pointer Lock API,
-  // non evitabile): la prima pressione sganciava solo il pointer (mostrando
-  // il vecchio hint "Click per entrare"), la pausa vera scattava solo alla
-  // seconda pressione. Aprirla anche da 'unlock' copre il caso mancante
+  // --- In-game pause (ESC) ---
+  // Idempotent (mode guard): reached both from the Escape keydown and
+  // from the 'unlock' event. With the pointer locked the browser
+  // intercepts ESC to unlock BEFORE the keydown reaches the page, so the
+  // keydown alone required two presses
   function openPauseMenu() {
     if (menuState.mode === 'menu') return
     menuState.mode = 'menu'
     menuOverlayEl.style.display = 'flex'
     showMenuScreen('menu-pause')
-    hint.style.display = 'none' // sovrascrive quanto fatto da 'unlock' (vedi sopra) — c'è un vero menu ora
+    hint.style.display = 'none' // a real menu is showing, override the 'unlock' hint
   }
   document.addEventListener('keydown', e => {
     if (e.code !== 'Escape' || (menuState.mode !== 'play' && menuState.mode !== 'spectate')) return
-    if (controls.isLocked) controls.unlock() // farà scattare anche il listener 'unlock' in main.js, openPauseMenu() è idempotente
+    if (controls.isLocked) controls.unlock() // also fires the 'unlock' listener; openPauseMenu is idempotent
     else openPauseMenu()
   })
-  // fattorizzata (non solo un listener inline): riusata anche dal bottone
-  // BACK TO MAIN MENU della title screen di fine partita (game-over-screen,
-  // main.js) — stessa identica pulizia, non una copia a parte
+  // Factored out: also reused by the game-over screen's BACK TO MAIN MENU
+  // button (main.js), same cleanup, not a separate copy
   function backToMainMenu() {
     resetScore()
     resetEnemyScore()
     resetGameplayState()
-    // l'HUD di gioco deve tornare invisibile finché non si preme di nuovo
-    // START — altrimenti restava sullo schermo (visibile attraverso il
-    // centro trasparente di #menu-overlay) anche mentre si è tornati al
-    // menu principale
+    // Game HUD hidden until the next START (it was visible through the
+    // transparent center of #menu-overlay otherwise)
     dashPanel.classList.add('hidden')
     combatPanel.classList.add('hidden')
     crosshair.classList.add('hidden')
@@ -228,19 +181,11 @@ export function initMainMenu(ctx) {
     enemyScoreboardEl.classList.add('hidden')
     controlsHintEl.classList.add('hidden')
     modeIndicator.classList.add('hidden')
-    // difesa in profondità: l'evento 'unlock' (main.js) rimostra sempre
-    // "Click to enter" — già sovrascritto da chi ci porta qui (openPauseMenu/
-    // showGameOverScreen), ma questo è il vero punto di arrivo finale
-    // qualunque sia stato il percorso, stesso principio del resto sopra
     hint.style.display = 'none'
-    // bug reale: openPauseMenu() rende visibile #menu-overlay (display:flex)
-    // PRIMA di chiamare backToMainMenu() da lì — ma showGameOverScreen()
-    // (main.js) non lo fa mai, mostra solo #game-over-screen (un overlay
-    // SEPARATO). Arrivando qui da GAME OVER, #menu-main diventava .active
-    // ma il suo contenitore #menu-overlay restava invisibile: si vedeva
-    // solo l'orbita lenta della camera (menuState.mode è già 'menu') senza
-    // alcun menu sopra. Impostato qui, non nei chiamanti, per lo stesso
-    // motivo di hint sopra: questo è il vero arrivo finale
+    // Real bug: openPauseMenu sets the overlay visible before calling
+    // here, but showGameOverScreen (a SEPARATE overlay) never does.
+    // Arriving from GAME OVER, #menu-main became .active inside an
+    // invisible container. Set here, the true common arrival point
     menuOverlayEl.style.display = 'flex'
     getManipulator().root.visible = false
     getEnemyManipulator().root.visible = false
@@ -248,42 +193,29 @@ export function initMainMenu(ctx) {
   }
   document.getElementById('menu-back-to-main-btn').addEventListener('click', backToMainMenu)
 
-  // comune a START (primo ingresso) e BACK TO GAME (ripresa da pausa): nasconde
-  // l'overlay ed entra in 'play'. Il primo ingresso ha in più dashPanel/
-  // crosshair da smostrare una tantum (nascosti di default nell'HTML finché
-  // non si è mai entrati in play) — la pausa non li tocca mai, restano già
-  // visibili da quando sono stati sbloccati la prima volta.
-  // controls.lock() diretto (non più "Click per entrare" a schermo): il
-  // click sul bottone STESSO è già il gesto utente richiesto dalla Pointer
-  // Lock API, non serve un secondo click sul canvas — l'evento 'lock' che
-  // scatta nasconde #hint da solo (vedi il listener in main.js)
+  // Shared by START (first entry) and BACK TO GAME (resume). Direct
+  // controls.lock(): the button click itself is already the user gesture
+  // the Pointer Lock API requires, no extra "click to enter" step
   function enterPlayMode() {
     menuOverlayEl.style.display = 'none'
     menuState.mode = 'play'
     modeIndicator.textContent = `MODE: ${menuState.mode.toUpperCase()}`
     controls.lock()
-    // il campo resta vuoto per tutto il Main Menu (vedi main.js, dove
-    // entrambi partono con root.visible = false) — solo da qui in poi il
-    // robot del giocatore torna visibile, per davvero entrare in partita
+    // The court stays empty for the whole Main Menu (both robots start
+    // with root.visible = false in main.js)
     getManipulator().root.visible = true
-    // PRACTICE è solo: il nemico resta nascosto (la sua AI/dispatch sono
-    // già disattivati altrove in base a gameMode, questo è solo l'aspetto
-    // visivo — senza, il modello procedurale restava lì fermo e visibile
-    // anche in una partita "da soli")
+    // PRACTICE is solo: the enemy stays hidden (its AI/dispatch are
+    // already gated on gameMode elsewhere, this is just visibility)
     const isOneVOne = menuState.gameMode === GameMode.ONE_V_ONE
     getEnemyManipulator().root.visible = isOneVOne
     combatPanel.classList.toggle('hidden', !isOneVOne)
     enemyScoreboardEl.classList.toggle('hidden', !isOneVOne)
   }
-  // funzione a parte (non solo dentro il listener) perché serve anche da
-  // altre varianti (es. altri punti d'ingresso alla pausa)
   function resumeGame() {
     enterPlayMode()
   }
   document.getElementById('menu-back-to-game-btn').addEventListener('click', resumeGame)
 
-  // solo PRACTICE e 1V1 esistono come bottoni (3V3 mai implementata, fuori
-  // scope — nessun bottone disabled da escludere qui)
   const gameModeMap = { practice: GameMode.PRACTICE, '1v1': GameMode.ONE_V_ONE }
   document.querySelectorAll('[data-gamemode]').forEach(el => {
     el.addEventListener('click', () => {
@@ -293,21 +225,17 @@ export function initMainMenu(ctx) {
   })
 
   document.querySelectorAll('[data-robot]').forEach(el => {
-    // applicata SUBITO (mai un reload): la schermata ROBOT è raggiungibile
-    // solo mentre manipulator.root è ancora nascosto (Main Menu, o dopo
-    // BACK TO MAIN MENU che lo nasconde di nuovo) — lo switch tra le 3
-    // istanze precaricate è quindi sempre invisibile, nessun glitch
-    // possibile scegliendo/ricambiando idea tra le card. In 1V1 c'è un
-    // secondo giro di scelta (l'avversario, stesso roster) — in PRACTICE
-    // non esiste alcun avversario, si salta diretti a TIMEOFDAY
+    // Applied immediately, never a reload: the ROBOT screen is only
+    // reachable while the robot is still hidden, so switching between
+    // the 3 preloaded instances is always invisible. In 1V1 a second
+    // pick follows (the opponent); PRACTICE skips straight to TIMEOFDAY
     el.addEventListener('click', () => {
       setActiveRobotClass(el.dataset.robot)
       showMenuScreen(menuState.gameMode === GameMode.ONE_V_ONE ? 'menu-robot-enemy' : 'menu-timeofday')
     })
   })
 
-  // stesso principio della scelta del proprio robot sopra — il roster
-  // dell'avversario è indipendente da quello del giocatore
+  // Same principle; the opponent roster is independent of the player's
   document.querySelectorAll('[data-robot-enemy]').forEach(el => {
     el.addEventListener('click', () => {
       setActiveEnemyRobotClass(el.dataset.robotEnemy)
@@ -315,10 +243,8 @@ export function initMainMenu(ctx) {
     })
   })
 
-  // il "back" da TIMEOFDAY deve tornare alla schermata di scelta robot
-  // giusta per la modalità corrente: ROBOT AVVERSARIO in 1V1 (l'ultimo
-  // passo prima di questa), ROBOT in PRACTICE (dove non esiste un giro
-  // avversario) — data-goto statico non basta, dipende da menuState.gameMode
+  // Back from TIMEOFDAY returns to the right robot screen for the current
+  // mode (a static data-goto cannot express this)
   document.getElementById('menu-timeofday-back-btn').addEventListener('click', () => {
     showMenuScreen(menuState.gameMode === GameMode.ONE_V_ONE ? 'menu-robot-enemy' : 'menu-robot')
   })
@@ -327,9 +253,8 @@ export function initMainMenu(ctx) {
   const menuStartBtn = document.getElementById('menu-start-btn')
   timeOfDayCards.forEach(el => {
     el.addEventListener('click', () => {
-      // solo scelta + preview (camera ancora in orbita isometrica, mode
-      // resta 'menu') — niente cambio di schermata: il tasto START compare
-      // sotto le card, nella STESSA schermata, non se ne apre un'altra
+      // Choice + preview only (camera stays in menu orbit): START appears
+      // below the cards on the SAME screen
       const timeMap = { sunrise: TimeOfDay.SUNRISE, day: TimeOfDay.DAY, sunset: TimeOfDay.SUNSET, night: TimeOfDay.NIGHT }
       menuState.timeOfDay = timeMap[el.dataset.timeofday]
       startTimeOfDayTransition(menuState.timeOfDay)
@@ -339,43 +264,31 @@ export function initMainMenu(ctx) {
   })
 
   document.getElementById('menu-start-btn').addEventListener('click', () => {
-    // resetGameplayState() qui, non solo su BACK TO MAIN MENU: la palla
-    // riceve il proprio owner iniziale in main.js in modo ASINCRONO, al
-    // caricamento del GLTF (basketball.setOwner(manipulator), una tantum,
-    // qualunque manipulator fosse quello ATTIVO in quel momento) — se
-    // l'utente sceglie una classe diversa DOPO che quel caricamento è già
-    // arrivato (tipico: scegliere robot richiede più tempo del download del
-    // GLTF pallone), quell'owner restava agganciato alla classe VECCHIA per
-    // sempre, perché su una primissima partita (mai passata da BACK TO MAIN
-    // MENU) resetGameplayState() non girava mai — bug reale: tasto destro
-    // non faceva scattare HANDLING (basketball.owner !== manipulator),
-    // "mirare" sembrava completamente rotto. Chiamarlo anche qui risincronizza
-    // sempre l'owner (e tutto il resto dello stato transitorio) col robot
-    // REALMENTE attivo, prima di ogni nuova partita
+    // resetGameplayState here too, not only on BACK TO MAIN MENU: the
+    // ball's initial owner is set asynchronously on GLTF load to whatever
+    // robot was active at that moment. Picking a different class AFTER
+    // the load left the owner glued to the old class on a first game
+    // (right mouse never entered HANDLING). This resyncs owner and all
+    // transient state with the truly active robot before every game
     resetGameplayState()
-    // dashPanel/crosshair/scoreboard/controls-hint: nascosti di default
-    // nell'HTML finché non si entra MAI in play — smostrati qui (combatPanel
-    // NON qui: dipende da PRACTICE/1V1, lo decide enterPlayMode sotto)
+    // Hidden by default in the HTML until play is first entered
+    // (combatPanel NOT here: it depends on PRACTICE/1V1, enterPlayMode decides)
     dashPanel.classList.remove('hidden')
     crosshair.classList.remove('hidden')
     scoreboardEl.classList.remove('hidden')
-    // "R: recover the ball" è un tasto di TEST valido solo in PRACTICE (il
-    // keydown handler in main.js è già disabilitato in 1V1 — vedi il
-    // commento lì) — l'hint visivo deve rispecchiare lo stesso gate,
-    // altrimenti resta un pulsante fuorviante che promette un tasto che in
-    // 1V1 non fa nulla
+    // "R: recover the ball" is a PRACTICE-only test key: the hint must
+    // mirror the same gate as the keydown handler in main.js
     controlsHintEl.classList.toggle('hidden', menuState.gameMode !== GameMode.PRACTICE)
     modeIndicator.classList.remove('hidden')
     enterPlayMode()
   })
 
-  // --- Main Menu: Options (grafica) ---
+  // --- Options (graphics) ---
   document.getElementById('opt-ssao').addEventListener('change', e => { ssaoPass.enabled = e.target.checked })
   document.getElementById('opt-shadows').addEventListener('change', e => {
-    // renderer.shadowMap.enabled da solo non basta: gli shader dei materiali
-    // già compilati con lo shadow branch attivo restano "congelati" com'erano
-    // (gotcha noto di three.js) — serve anche spegnere castShadow sulla luce
-    // vera e forzare la ricompilazione di ogni materiale in scena
+    // renderer.shadowMap.enabled alone is not enough: already-compiled
+    // materials keep their shadow branch (known three.js gotcha). Also
+    // disable castShadow on the light and force every material to recompile
     const enabled = e.target.checked
     renderer.shadowMap.enabled = enabled
     sun.castShadow = enabled
@@ -391,11 +304,8 @@ export function initMainMenu(ctx) {
     camera.updateProjectionMatrix()
   })
 
-  // resetGameplayState esportata direttamente (accetta ballOwner opzionale,
-  // default = giocatore): usata da BACK TO MAIN MENU qui dentro, e da
-  // main.js per i due casi di turnover di possesso in 1V1 (canestro subito,
-  // palla uscita dal campo non recuperata) — main.js decide CHI diventa il
-  // nuovo proprietario e se siamo in 1V1, questa funzione resta un
-  // meccanismo puro, non una decisione
+  // resetGameplayState exported directly (optional ballOwner, default
+  // player): main.js uses it for the two 1V1 turnover cases and decides
+  // WHO the new owner is; this stays a pure mechanism
   return { openPauseMenu, resumeGame, showMenuScreen, resetGameplayState, backToMainMenu }
 }

@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+﻿import * as THREE from 'three'
 
 // Rim torus (XZ plane), radii from the GLTF accessors.
 // needs RIM_RING_RADIUS for the hoop-assist cone, CollisionDebugView.js
@@ -8,7 +8,7 @@ export const RIM_TUBE_RADIUS = 4
 
 // All static court collisions (backboard/rim/walls/poles/benches): owns the
 // geometry arrays (extracted from GLTF accessors) and
-// resolve(), which checks them all at once. No physics engine — sphere vs
+// resolve(), which checks them all at once. No physics engine, sphere vs
 // AABB/torus with velocity reflection v' = v - (1+e)(v·n)n.
 export class CollisionWorld 
 {
@@ -243,7 +243,7 @@ export class CollisionWorld
   } 
 
   // One pass over every collidable, shared by the real shot flight AND the
-  // trajectory preview — new collidable types get added here only.
+  // trajectory preview, new collidable types get added here only.
   // Returns true if at least one hit occurred
   resolve(position, velocity, dt, cooldownMap, ballRadius) 
   {

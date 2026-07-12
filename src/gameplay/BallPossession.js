@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+﻿import * as THREE from 'three'
 import { RobotState } from '../robots/RobotBase.js'
 import { BallState } from './Basketball.js'
 import { angleToForward, rotateRight } from '../utils/mathUtils.js'
@@ -10,7 +10,7 @@ import { BALL_BOUNCE_SPEED, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX } from '../utils/co
 export const paddleWorldPos = new THREE.Vector3()
 
 // Fresh world position of a robot hierarchy node THIS frame (matrixWorld
-// normally updates only at render time — without the explicit update it
+// normally updates only at render time, without the explicit update it
 // would lag one frame)
 export function getObjectWorldPosition(object3D, out) 
 {
@@ -42,7 +42,7 @@ export function dribbleAmplitudesRad(dribbleTuning) {
 }
 
 // Pin the ball to the V-paddle convergence point (ballRestPoint, not
-// .paddle — the flat center would visibly interpenetrate). Shared by
+// .paddle, the flat center would visibly interpenetrate). Shared by
 // handling, pickup and the shoot animation
 export function snapBallToRestPoint(manipulator, basketball) {
   getObjectWorldPosition(manipulator.ballRestPoint, paddleWorldPos)
@@ -50,7 +50,7 @@ export function snapBallToRestPoint(manipulator, basketball) {
 }
 
 // Return a robot to "has the ball, clean dribble, no leftover
-// HANDLING/shoot state" — shared by pickup completion and successful
+// HANDLING/shoot state", shared by pickup completion and successful
 // steals. Stale released/grip/tiltOffset caused a dropped ball or a
 // crooked paddle in the next dribble
 export function resetToNeutralPossession(manipulator, { dribbleState, handlingState, shootingState }, resetDribbleState) {
@@ -97,7 +97,7 @@ export function createDribbleState() {
   }
 }
 
-// Dribble simulation, push/drop/rise state machine — parameterized on any
+// Dribble simulation, push/drop/rise state machine, parameterized on any
 // robot/ball-target/state object, so the Main Menu card preview reuses the
 // exact same code as the real game. state is mutated in place. physics is
 // { ballRadius } (passed fresh: live-tunable). onBounce fires on floor
@@ -108,7 +108,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
   const dribbleTuning = robot.dribbleTuning
   state.phaseT += dt
   const [elbowAmplitude, link1Amplitude] = dribbleAmplitudesRad(dribbleTuning)
-  // armEase only updates in 'push'/'rise' — during 'drop' the arm holds
+  // armEase only updates in 'push'/'rise', during 'drop' the arm holds
   if (state.phase === 'push') {
     const t = Math.min(state.phaseT / dribbleTuning.pushDuration, 1)
     state.armEase = t * t // ease-in: max speed exactly at release
@@ -129,7 +129,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
   // Per-instance world-space offsets move the tracking point off the
   // paddle center. Deliberately NOT rotated with elbow/wrist pitch: an
   // offset arcing with the 40-degree push sweep would visibly detach the
-  // ball — only the base yaw matters, Down is always world-down. Valid
+  // ball, only the base yaw matters, Down is always world-down. Valid
   // here only because the dribble keeps the paddle tilt constant
   angleToForward(robot.joints.base.rotation.y, paddleForwardDir)
   rotateRight(paddleForwardDir, paddleSideDir)
@@ -150,14 +150,14 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     if (state.previousPushPaddleY !== null) state.ballVelocityY = (paddleWorldPos.y - state.previousPushPaddleY) / dt
     state.previousPushPaddleY = paddleWorldPos.y
     // Tolerance, not strict >= 1: phaseT accumulates 1/120 (inexact in
-    // binary), so armEase reaches 0.99999... — without tolerance an extra
+    // binary), so armEase reaches 0.99999..., without tolerance an extra
     // wasted step ran with the paddle already still, making the last
     // measured velocity exactly zero every cycle
     if (state.armEase >= 1 - 1e-6) { state.phase = 'drop'; state.phaseT = 0 }
   } else if (state.phase === 'drop') {
     // Safety net: a real fall lands well under 1s. If the ball position
     // was hijacked elsewhere (concurrent pickup/steal/block) the floor
-    // condition may never trigger and the paddle would stay frozen open —
+    // condition may never trigger and the paddle would stay frozen open:
     // force a clean re-entry instead
     if (state.phaseT > DRIBBLE_DROP_SAFETY_TIMEOUT) {
       state.phase = 'push'
@@ -186,12 +186,12 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
     // accumulate frame after frame instead of staying a constant offset)
     state.riseBallisticY += state.ballVelocityY * dt
     // Structural invariant: never let the ball rise past the paddle,
-    // whatever combination of the 5+ interacting tuning knobs is set —
-    // a calibration-only guarantee broke on every retuning round
+    // whatever combination of the 5+ interacting tuning knobs is set.
+    // A calibration-only guarantee broke on every retuning round
     const ballY = Math.min(state.riseBallisticY - dribbleTuning.riseYCorrection, paddleWorldPos.y)
     ballPositionTarget.set(paddleWorldPos.x, ballY, paddleWorldPos.z)
     // Re-lock exactly at the ballistic apex (v=0), where both ball speed
-    // and arm return are flattest — minimizes the visible snap
+    // and arm return are flattest, minimizes the visible snap
     if (state.armEase <= 0 || state.ballVelocityY <= 0) {
       // Freeze the ball↔paddle offset at the re-lock instant so 'push'
       // restarts from the real ball position
@@ -201,7 +201,7 @@ export function stepDribble(state, robot, ballPositionTarget, dt, physics, onBou
       state.phaseT = 0
     }
   }
-  // Per-class visual flourish (legs crouching, drone bobbing...) — AFTER
+  // Per-class visual flourish (legs crouching, drone bobbing...), AFTER
   // ball/arm are positioned for this step, never before. Empty default
   robot.onDribbleTick(state, dt)
 }
@@ -234,10 +234,10 @@ export function initBallPossession(ctx) {
     robot.controls.setGrip(0)
     handlingState.tiltOffset = 0
     robot.controls.setShootTilt(0)
-    // Reset the real joints too — resetDribbleState() only clears the
+    // Reset the real joints too, resetDribbleState() only clears the
     // variables, the joints would hold the HANDLING pose one more frame
     robot.controls.setDribbleOffsets(0, 0)
-    // updateAimPosture stops being called outside HANDLING — without this
+    // updateAimPosture stops being called outside HANDLING, without this
     // the Drone body would stay tilted at the last aim angle
     robot.updateAimPosture(0, 1)
   }
@@ -252,7 +252,7 @@ export function initBallPossession(ctx) {
     stepDribble(dribbleState, getManipulator(), ctx.getBasketball().position, dt, dribblePhysics, onDribbleBounce)
   }
 
-  // HANDLING (right mouse held): an interpolated pose, not a simulation —
+  // HANDLING (right mouse held): an interpolated pose, not a simulation,
   // no fixed timestep. Ease/grip approach their targets with the usual
   // framerate-independent exponential smoothing
   function updateHandling(delta) {
@@ -267,7 +267,7 @@ export function initBallPossession(ctx) {
     // shoot animation): no jump when the windup starts
     const aimPitchOffset = computeAimPitchOffset()
     robot.controls.setAimPitch(aimPitchOffset)
-    // Per-class hook (empty default) — only the Drone tilts its body
+    // Per-class hook (empty default), only the Drone tilts its body
     robot.updateAimPosture(aimPitchOffset, delta)
 
     // Read fresh every frame: paddleTilt is live-tunable from debug
@@ -297,7 +297,7 @@ export function initBallPossession(ctx) {
     if (robot.root.position.distanceToSquared(ball.position) > pickupCoarseRadius * pickupCoarseRadius) return
     if (!isRobotTouchingBall(robot, ball, getBallRadius(), pickupMargin)) return
     // ATOMIC claim here, not at animation end: in 1v1 both robots can pass
-    // this check in the SAME frame — the first claimant marks the ball
+    // this check in the SAME frame, the first claimant marks the ball
     // taken so the second one stops on its own. Without this, two pickups
     // fought over ball.position every frame (visible jitter on the floor)
     ball.setState(BallState.HANDLED)
@@ -306,7 +306,7 @@ export function initBallPossession(ctx) {
     pickupState.phaseT = 0
   }
 
-  // Ball snaps to the paddle on the FIRST frame (no lerp — it looked like
+  // Ball snaps to the paddle on the FIRST frame (no lerp, it looked like
   // it was escaping); the arm plays a short 0→1→0 dip as a visual
   // flourish, returning to 0 before the pickup ends so the resuming
   // dribble (which starts at armEase=0) attaches without a snap

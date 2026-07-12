@@ -3,21 +3,11 @@ import { createSliderControl, createToggleSection, addComponentSection } from '.
 import { paddleWorldPos, isRobotTouchingBall } from '../gameplay/BallPossession.js'
 import { BALL_GRAVITY, BALL_BOUNCE_SPEED } from '../utils/constants.js'
 
-// Quinto pezzo del refactor modulare: il pannello debug (tasto P) vero e
-// proprio — le liste di slider/readout, non gli helper DOM puri (già in
-// debugPanelHelpers.js). Stesso principio di context-object di
-// MainMenu/BallPossession/ShootingSystem.
+// Debug panel (key P): slider/readout lists. Context-object pattern.
 //
-// I 5 valori ancora `let` sciolti in main.js (BALL_RADIUS/
-// HANDLING_HEIGHT_BOOST/HANDLING_CAMERA_SIDE_OFFSET/ARM_YAW_OFFSET_DEG/
-// CROSSHAIR_HEIGHT — usati anche altrove in main.js, genuinamente globali
-// non per-classe; BALL_REST_EXTRA_OFFSET è invece diventato un campo di
-// istanza per-robot, vedi RobotBase.js/Drone.js)
-// arrivano come coppie getter+setter (`getX`/`setX`) invece che come
-// valore semplice: un `export let` non è riassegnabile da chi importa, ma
-// una funzione setter definita in main.js e chiamata da qui può sempre
-// scrivere la variabile che chiude — stesso principio del `getBallRadius`
-// già usato da BallPossession.js/ShootingSystem.js, esteso a un setter.
+// The few values still living as loose `let` in main.js (genuinely global,
+// not per-class) arrive as getter+setter pairs: an `export let` cannot be
+// reassigned by the importer, but a setter closing over it can
 export function initDebugPanel(ctx) {
   const {
     getManipulator,
@@ -34,28 +24,16 @@ export function initDebugPanel(ctx) {
 
   const debugPanel = document.getElementById('debug-panel')
   const cameraPanel = document.getElementById('camera-panel')
-  // "manipulator" qui resta l'istanza ATTIVA al momento in cui il pannello
-  // viene costruito (usata solo dal bottone Copy Config sotto, che
-  // serializza la forma di QUELLA classe) — gli slider Shape/Config per
-  // le 3 classi sono invece generati da buildShapeSection più sotto,
-  // legati esplicitamente a playerRobots.manipulator/legged/drone (non a
-  // "quale sia attiva ora"), così si possono tarare tutte e tre senza
-  // doverle selezionare una alla volta dal menu. I readout "live" più
-  // sotto (pickup-dist/pickup-state) leggono invece getManipulator()
-  // fresco ad ogni frame, così restano corretti anche se la classe attiva
-  // cambia dal menu
+  // Active instance at panel build time, used only by Copy Config below.
+  // Shape/Animation sections bind explicitly to playerRobots.* instead
+  // (tune all 3 classes without selecting each from the menu); live
+  // readouts read getManipulator() fresh so they follow class switches
   const manipulator = getManipulator()
 
-  // --- Animation Preview: forza la classe ATTIVA in una posa/animazione a
-  // scelta (DRIBBLE/HANDLING/SHOOT/mossa speciale), utilizzabile SIA in Play
-  // SIA in Spectate — richiesto dal vivo: passare a Spectate per girare
-  // liberamente attorno al robot e ispezionare una posa (es. HANDLING, o il
-  // 'grab' del Flight) di lato/da dietro non funzionava, perché uscire da
-  // Play forza il rilascio della palla (releaseBallHandling) e la mossa
-  // speciale vera avanza solo dentro il blocco Play (vedi debugPreviewState/
-  // debugPreview* in main.js). Sezione SEMPRE visibile (non un
-  // createToggleSection collassabile): è il primo posto dove si finisce ad
-  // aprire il pannello proprio per questo scopo, non va nascosta dietro un click extra
+  // --- Animation Preview: force the ACTIVE class into a pose/animation,
+  // usable in Play AND Spectate (leaving Play releases the ball, so poses
+  // like HANDLING were never inspectable from a free camera). Always
+  // visible, not collapsible: it is the main reason to open the panel
   const animationPreview = document.createElement('div')
   animationPreview.className = 'component-panel'
   const previewLabel = document.createElement('div')
@@ -75,26 +53,15 @@ export function initDebugPanel(ctx) {
   }
   debugPanel.append(animationPreview)
 
-  // range condiviso da tutti gli slider "Scale" per componente, invece della
-  // stessa tripla min/max/step ripetuta 7 volte
+  // Shared range for every per-component Scale slider
   const SCALE_SLIDER_RANGE = { min: 0.2, max: 3, step: 0.05 }
-  // estremi degli slider Paddle Angle/Tilt — baseline attuale tarata proprio
-  // su questi massimi (vedi state.paddleAngle/paddleTilt in manipulator.js)
   const PADDLE_ANGLE_MAX = 2.4
   const PADDLE_TILT_MAX = 1.2
 
-  // --- Shape (dimensioni statiche: scale/length/thickness) — funzione
-  // condivisa invece di un blocco copiato 3 volte: MANIPULATOR/LEGGED/DRONE
-  // condividono lo stesso identico "vocabolario" di setter (manipulator.js/
-  // leggedManipulator.js/drone.js espongono tutti manipulatorScale/link1*/
-  // link2*/baseJointScale/elbowJointScale/endEffectorScale/paddleAngle/
-  // paddleTilt con la stessa firma) — cambia solo il nome del componente
-  // "locomozione" (Wheels/Legs, entrambi con solo Scale) e se esiste un
-  // Disc vero (DRONE non ne ha uno, corpo+rotori a parte). Legata
-  // all'ISTANZA passata esplicitamente (playerRobots[key], NON
-  // getManipulator()): tarare la forma di LEGGED/DRONE non deve richiedere
-  // di selezionarli attivamente prima — stesso principio già applicato a
-  // Ball Offset sopra
+  // --- Shape (static sizes): one shared builder, the 3 classes expose the
+  // same setter vocabulary. Only the locomotion component name differs
+  // (Wheels/Legs, Drone has neither) and whether a Disc exists. Bound to
+  // the explicit instance, not the active one
   function buildShapeSection(parentContainer, label, robot, { locomotionLabel, locomotionSetterKey }) {
     const cfg = robot.getConfig()
     const shape = createToggleSection(parentContainer, `${label} Shape`)
@@ -144,16 +111,10 @@ export function initDebugPanel(ctx) {
   buildShapeSection(debugPanel, 'Legged', playerRobots.legged, { locomotionLabel: 'Legs', locomotionSetterKey: 'legsScale' })
   buildShapeSection(debugPanel, 'Drone', playerRobots.drone, { locomotionLabel: null, locomotionSetterKey: null })
 
-  // --- Animation (Dribble/Shoot/Handling): dribbleTuning/shootTuning/
-  // handlingTuning sono ora campi di ISTANZA sul robot (RobotBase.js),
-  // stesso motivo di Ball Offset/Shape sopra — MANIPULATOR/LEGGED/DRONE
-  // hanno braccio/scala/orientamento diversi, gli stessi numeri di durata/
-  // ampiezza non producono lo stesso risultato per tutte. Una funzione
-  // condivisa invece di un blocco copiato 3 volte, chiamata una volta per
-  // classe con la SUA istanza (playerRobots[key], non "quella attiva ora")
-  // lista slider "Shoot" estratta a parte (non solo inline in
-  // buildAnimationSection): riusata identica sia per shootTuning sia per
-  // elevatedShootTuning (Drone) — stessi campi, oggetto target diverso
+  // --- Animation: dribble/shoot/handling tuning are per-instance fields
+  // (RobotBase), one section per class bound to ITS instance.
+  // Shoot slider list extracted: reused for both shootTuning and the
+  // Drone's elevatedShootTuning (same fields, different target object)
   function buildShootSliders(shootTuning) {
     return [
       { name: 'Windup Duration (s)', min: 0.05, max: 1, step: 0.01, value: shootTuning.windupDuration, onChange: v => { shootTuning.windupDuration = v } },
@@ -186,11 +147,8 @@ export function initDebugPanel(ctx) {
       { name: 'Dribble Gravity (own, not shot)', min: 100, max: 5000, step: 10, value: dribbleTuning.dribbleGravity, onChange: v => { dribbleTuning.dribbleGravity = v } },
     ])
     addComponentSection(animation, 'Shoot', buildShootSliders(shootTuning))
-    // elevatedShootTuning (RobotBase.js, default null): SOLO il Drone la
-    // usa (Flight) — la posa di windup/release corretta a terra
-    // interseca il corpo se riusata mentre già sollevato, e viceversa,
-    // vedi Drone.js. Sottomenu extra, stessi identici slider di Shoot
-    // sopra ma legati all'oggetto ALTERNATIVO invece di duplicare la lista
+    // Drone only: alternate pose while airborne (see Drone.js), same
+    // sliders bound to the alternate object
     if (robot.elevatedShootTuning) {
       addComponentSection(animation, 'Shoot (elevated / Flight)', buildShootSliders(robot.elevatedShootTuning))
     }
@@ -198,11 +156,8 @@ export function initDebugPanel(ctx) {
       { name: 'Arm Ease', min: -1, max: 1, step: 0.02, value: handlingTuning.ease, onChange: v => { handlingTuning.ease = v } },
       { name: 'Grip Angle (rad)', min: 0, max: PADDLE_ANGLE_MAX, step: 0.02, value: handlingTuning.gripOffset, onChange: v => { handlingTuning.gripOffset = v } },
       { name: 'Transition Speed', min: 1, max: 30, step: 1, value: handlingTuning.transitionSpeed, onChange: v => { handlingTuning.transitionSpeed = v } },
-      // ballRestExtraOffset (RobotBase.js/Drone.js): campo di ISTANZA, non
-      // più un unico slider globale — bug reale trovato: con gripOffset
-      // alto (V stretta) ballRestPoint può finire DENTRO il solido delle
-      // due metà della paletta, l'entità della correzione necessaria
-      // dipende da braccio/scala/geometria della classe (vedi Drone.js)
+      // Per-instance: with a tight grip ballRestPoint can end up INSIDE
+      // the paddle solid; the needed correction depends on the class
       { name: 'Ball Rest Extra Offset', min: -5, max: 10, step: 0.05, value: robot.ballRestExtraOffset, onChange: v => { robot.ballRestExtraOffset = v; robot.controls.setBallRestOffset(v) } },
     ])
   }
@@ -211,10 +166,8 @@ export function initDebugPanel(ctx) {
   buildAnimationSection(debugPanel, 'Legged', playerRobots.legged)
   buildAnimationSection(debugPanel, 'Drone', playerRobots.drone)
 
-  // --- Camera / Aim: GLOBALI, non per-classe — non sono campi di istanza
-  // sul robot (restano `let` sciolti in main.js), riguardano la camera/il
-  // crosshair del giocatore in Play mode, non la geometria/animazione di
-  // una classe specifica
+  // --- Camera / Aim: genuinely global (player camera/crosshair), not
+  // per-class instance fields
   const cameraAim = createToggleSection(debugPanel, 'Camera / Aim')
   addComponentSection(cameraAim, 'Handling camera', [
     { name: 'Camera Height Boost', min: 0, max: 300, step: 5, value: getHandlingHeightBoost(), onChange: setHandlingHeightBoost },
@@ -225,14 +178,10 @@ export function initDebugPanel(ctx) {
     { name: 'Crosshair Height (px)', min: 0, max: 300, step: 5, value: getCrosshairHeight(), onChange: setCrosshairHeight },
   ])
 
-  // --- Drone Animation: droneTuning (Drone.js) — oggetto MUTABILE di
-  // proprietà della CLASSE (modulo Drone.js), non dell'istanza: un solo
-  // Drone gioca alla volta lato giocatore, non serve un per-istanza come
-  // dribbleTuning/shootTuning/handlingTuning sopra (quelli invece sono
-  // campi di RobotBase, uno per istanza/classe). Solo il Drone vola/si
-  // inclina/fa Flight — MANIPULATOR/LEGGED non hanno un equivalente
+  // --- Drone Animation: droneTuning is module-level (one playable Drone
+  // per side, no need for per-instance)
   const droneAnimation = createToggleSection(debugPanel, 'Drone Animation')
-  addComponentSection(droneAnimation, 'Flight (bank/rotori)', [
+  addComponentSection(droneAnimation, 'Flight (bank/rotors)', [
     { name: 'Rotor Spin Speed', min: 0, max: 60, step: 1, value: droneTuning.rotorSpinSpeed, onChange: v => { droneTuning.rotorSpinSpeed = v } },
     { name: 'Bank Gain', min: 0, max: 1, step: 0.01, value: droneTuning.bankGain, onChange: v => { droneTuning.bankGain = v } },
     { name: 'Bank Max (rad)', min: 0, max: 1.2, step: 0.01, value: droneTuning.bankMax, onChange: v => { droneTuning.bankMax = v } },
@@ -261,16 +210,10 @@ export function initDebugPanel(ctx) {
   createSliderControl(basketballConfig, {
     name: 'Scale', min: 5, max: 40, step: 1, value: getBallRadius(), onChange: setBallRadius,
   })
-  // Ball Offset: campi di ISTANZA sul robot (RobotBase.js), non più valori
-  // condivisi — ogni classe ha un braccio/orientamento diverso (LEGGED più
-  // grande, DRONE capovolto appeso sotto il corpo), lo stesso numero
-  // assoluto non produce lo stesso punto visivo per tutte. Un sottomenu per
-  // classe (playerRobots, le 3 istanze precaricate — non solo quella
-  // ATTIVA ORA, vedi commento su playerRobots in main.js): tarare
-  // LEGGED/DRONE non deve richiedere di uscire e rientrare in partita
-  // selezionandole una alla volta — si aprono e regolano tutte e tre nello
-  // stesso pannello, a prescindere da quale si sta giocando in questo momento
-  const ballOffsetSection = createToggleSection(basketballConfig, 'Ball Offset (from paddle center, per classe)')
+  // Per-instance fields: each class arm differs (LEGGED bigger, DRONE
+  // flipped), the same absolute offset does not land the same. One
+  // submenu per class so all 3 tune without switching the active one
+  const ballOffsetSection = createToggleSection(basketballConfig, 'Ball Offset (from paddle center, per class)')
   const BALL_OFFSET_LABEL_BY_KEY = { manipulator: 'Manipulator', legged: 'Legged', drone: 'Drone' }
   for (const [key, robot] of Object.entries(playerRobots)) {
     addComponentSection(ballOffsetSection, BALL_OFFSET_LABEL_BY_KEY[key] ?? key, [
@@ -280,17 +223,15 @@ export function initDebugPanel(ctx) {
     ])
   }
 
-  // "Copy config": serializza TUTTI i parametri regolabili da debug pronti
-  // da incollare nel codice (manipolatore + dribble + pallone, non solo la
-  // forma del robot come prima — stesso schema usato finora per hardcodare
-  // scala/spawn camera)
+  // Copy config: serialize every debug-tunable parameter, ready to paste
+  // back as hardcoded defaults
   const copyConfigBtn = document.createElement('button')
   copyConfigBtn.id = 'copy-config-btn'
   copyConfigBtn.textContent = 'Copy config'
   const copyConfigFeedback = document.createElement('div')
   copyConfigFeedback.id = 'copy-config-feedback'
   debugPanel.append(copyConfigBtn, copyConfigFeedback)
-  const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms prima che il messaggio "Copied" sparisca
+  const COPY_CONFIG_FEEDBACK_DURATION = 2500 // ms before the "Copied" message fades
 
   copyConfigBtn.addEventListener('click', async () => {
     const c = {
@@ -323,9 +264,8 @@ export function initDebugPanel(ctx) {
     setTimeout(() => { copyConfigFeedback.textContent = '' }, COPY_CONFIG_FEEDBACK_DURATION)
   })
 
-  // --- Pannello Camera (posizione + angoli, sola lettura) ---
-  // [elemento, funzione che legge il valore corrente] invece di 6 variabili
-  // + 6 assegnazioni .textContent speculari nel loop
+  // --- Camera panel (read-only readouts) ---
+  // [element, getter] pairs instead of 6 variables + 6 mirrored assignments
   const camReadouts = [
     ['cam-x', () => camera.position.x.toFixed(1)],
     ['cam-y', () => camera.position.y.toFixed(1)],
@@ -333,30 +273,19 @@ export function initDebugPanel(ctx) {
     ['cam-pitch', () => THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1)],
     ['cam-yaw', () => THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1)],
     ['cam-roll', () => THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1)],
-    // stato grezzo della macchina a stati del palleggio, per verificare a
-    // occhio SE è davvero questo a scattare in anticipo (non solo i numeri
-    // derivati sotto)
     ['dribble-phase', () => dribbleState.phase],
     ['dribble-arm-ease', () => dribbleState.armEase.toFixed(3)],
     ['ball-y', () => { const ball = ctx.getBasketball(); return ball ? ball.position.y.toFixed(1) : '—' }],
     ['paddle-y', () => paddleWorldPos.y.toFixed(1)],
-    // "Gap (live)" è quasi sempre diverso da zero (palla e paletta seguono
-    // curve diverse per la maggior parte del ciclo, per design) — non è il
-    // numero utile. "Reconnect Gap" invece è lockOffset.y: congelato
-    // esattamente nell'istante del riaggancio, resta leggibile tra un ciclo
-    // e l'altro invece di sfarfallare — è QUESTO che deve tendere a 0
-    // tarando Bounce Speed/Gravity
+    // Live gap is nonzero by design for most of the cycle; the useful
+    // number is lockOffset.y, frozen at the re-lock instant. THAT should
+    // tend to 0 when tuning Bounce Speed/Gravity
     ['ball-paddle-gap', () => { const ball = ctx.getBasketball(); return ball ? (ball.position.y - paddleWorldPos.y).toFixed(1) : '—' }],
     ['reconnect-gap', () => dribbleState.lockOffset.y.toFixed(1)],
-    // diagnostica preview traiettoria: quanti punti ha scritto l'ultima volta
-    // e PERCHÉ si è fermata (pavimento / esaurito il budget di passi / mai
-    // aggiornata) — per capire a occhio, mentre si mira, cosa succede davvero
-    // invece di indovinare dal solo aspetto della linea
+    // Trajectory preview diagnostics: point count and stop reason
     ['traj-count', () => trajDebug.count],
     ['traj-stop', () => trajDebug.stopReason],
-    // true/false reale del test usato da checkForPickup (bounding box del
-    // robot, non solo la distanza dal centro) e stato FSM, per verificare a
-    // occhio se il pickup dovrebbe scattare invece di indovinare
+    // The EXACT test checkForPickup uses, not an approximation
     ['pickup-dist', () => {
       const ball = ctx.getBasketball()
       if (!ball) return '—'
@@ -373,14 +302,9 @@ export function initDebugPanel(ctx) {
     const opening = debugPanel.classList.contains('hidden')
     debugPanel.classList.toggle('hidden', !opening)
     cameraPanel.classList.toggle('hidden', !opening)
-    // serve il cursore per usare lo slider, quindi si sblocca il pointer
-    // lock — MA questo è un dettaglio del pannello debug, non "il
-    // giocatore ha premuto Esc per mettere in pausa": senza
-    // suppressPauseOnUnlock (stesso flag/motivo già usato dal tasto M in
-    // main.js) l'unlock qui faceva scattare silenziosamente openPauseMenu()
-    // (menuState.mode passava a 'menu'), bloccando movimento/mira/HANDLING
-    // finché non ci si accorgeva di dover chiudere anche la pausa — bug
-    // vero, non specifico di nessuna classe robot
+    // Sliders need the cursor, so unlock the pointer, but flag it so the
+    // unlock is not mistaken for "ESC pressed" (which opens the pause
+    // menu). Same flag/reason as the M key in main.js
     if (opening && controls.isLocked) { setSuppressPauseOnUnlock(true); controls.unlock() }
   })
 
