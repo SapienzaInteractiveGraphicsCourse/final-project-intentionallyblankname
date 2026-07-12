@@ -30,9 +30,23 @@ import { ORBIT_PITCH_MIN, ORBIT_PITCH_MAX, BALL_GRAVITY } from './utils/constant
 // antialias:true would have no effect: rendering goes through
 // EffectComposer render targets (no MSAA), AA is done by SMAAPass
 const renderer = new THREE.WebGLRenderer()
-// pixelRatio 1: devicePixelRatio 2 quadruples the SSAO pass cost
-renderer.setPixelRatio(1)
+// Capped at 1.5, not the raw devicePixelRatio: a flat 1 left everything
+// (textures, silhouettes) visibly blocky on high-DPI displays, since the
+// browser then upscales the low-res canvas to fill the real screen. SSAO
+// cost scales with the SQUARE of the ratio though, so the raw ratio (2 on
+// most Retina/scaled-Windows displays) would quadruple it and reintroduce
+// the lag the original SSAOPass tuning fixed; 1.5 keeps that under 2.25x
+// while still meaningfully sharpening edges and textures
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
 renderer.setSize(window.innerWidth, window.innerHeight)
+// Anisotropic filtering for the downloaded GLTF textures (court, ball):
+// a single isotropic mip level either blurs or aliases a texture seen at
+// a grazing angle, e.g. the court lines receding toward the horizon
+// (course Lecture 09, "Anisotropic filtering is especially important
+// with far away planes"). The real hardware max, unlike the fixed value
+// used for the procedural robot/bench/lamp textures (no renderer
+// reference there, see createProceduralPBRMaps)
+const MAX_ANISOTROPY = renderer.capabilities.getMaxAnisotropy()
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -419,6 +433,9 @@ loader.load('./models/court/basketball_court/scene.gltf', gltf => {
     if (!child.isMesh) return
     child.castShadow = true
     child.receiveShadow = true
+    // Every downloaded court texture (floor, lines, walls) benefits: the
+    // whole court is viewed at a grazing angle from the default camera
+    if (child.material?.map) child.material.map.anisotropy = MAX_ANISOTROPY
     // z-fighting fix for the court lines (coplanar with the floor)
     if (child.material?.name === 'Basket_ball_lines') {
       child.material.polygonOffset = true
@@ -560,6 +577,11 @@ loader.load('./models/basketball_ball/scene.gltf', gltf => {
     child.receiveShadow = true
     // Slight brightening of the color map (multiplies texels, no tint)
     if (child.material?.color) child.material.color.multiplyScalar(BALL_COLOR_BRIGHTNESS)
+    // All 3 map types (color, normal, metalness/roughness): the ball is
+    // seen edge-on constantly while rolling and dribbling
+    for (const mapKey of ['map', 'normalMap', 'roughnessMap', 'metalnessMap']) {
+      if (child.material?.[mapKey]) child.material[mapKey].anisotropy = MAX_ANISOTROPY
+    }
   })
   basketball = new Basketball(gltf.scene)
   // Player starts in possession. Referencing `manipulator` (declared

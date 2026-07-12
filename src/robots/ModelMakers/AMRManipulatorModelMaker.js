@@ -119,6 +119,18 @@ export function createProceduralPBRMaps({ size = 256, drawHeightField, baseRough
   roughnessMap.repeat.set(4, 4)
   heightMap.repeat.set(4, 4)
 
+  // Anisotropic filtering: a single isotropic mip level either blurs or
+  // aliases a texture seen at a grazing angle (the course's Lecture 09
+  // covers this directly, "especially important with far away planes")
+  // which is exactly the repeated tiling here, viewed edge-on on a robot
+  // walking away from the camera. Fixed value, not
+  // renderer.capabilities.getMaxAnisotropy(): this factory has no
+  // renderer reference (it is called from deep inside the robot
+  // hierarchy construction), and 8 is supported by effectively every GPU
+  normalMap.anisotropy = 8
+  roughnessMap.anisotropy = 8
+  heightMap.anisotropy = 8
+
   return { normalMap, roughnessMap, heightMap }
 }
 
