@@ -2,6 +2,11 @@
 
 **Final Project · Interactive Graphics** · Prof. Marco Schaerf · La Sapienza University of Rome
 
+<p align="center">
+  <img src="readme assets\mechabasketball.gif" alt="Mecha basketball gameplay" width="40%" />
+  <img src="readme assets\mechabasketball2.png" alt="stepDribble schematics" width="41.5%" />
+</p>
+
 [![Three.js](https://img.shields.io/badge/Three.js-e8c205?style=flat-square&logo=three.js&logoColor=black)](https://threejs.org/)
 [![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/docs/Web/JavaScript)
@@ -14,6 +19,7 @@ Alessandro Carotenuto, 1847282
 ## Demo
 
 ### [**CLICK HERE TO PLAY**](https://sapienzainteractivegraphicscourse.github.io/final-project-intentionallyblankname/)
+### [**CLICK HERE FOR THE PRESENTATION**](https://docs.google.com/presentation/d/1CJocUoaC0HkHX6a_r1d-0-PkXBEurmy4/edit?usp=sharing&ouid=103770783998888792603&rtpof=true&sd=true/)
 
 Runs entirely in the browser, no installation required.
 
