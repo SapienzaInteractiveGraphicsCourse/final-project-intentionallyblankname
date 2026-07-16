@@ -3,8 +3,8 @@
 **Final Project · Interactive Graphics** · Prof. Marco Schaerf · La Sapienza University of Rome
 
 <p align="center">
-  <img src="readme assets\mechabasketball.gif" alt="Mecha basketball gameplay" width="40%" />
-  <img src="readme assets\mechabasketball2.png" alt="stepDribble schematics" width="41.5%" />
+  <img src="readme assets\mechabasketball.gif" alt="Mecha basketball gameplay" width="45%" />
+  <img src="readme assets\mechabasketball2.png" alt="stepDribble schematics" width="46.75%" />
 </p>
 
 [![Three.js](https://img.shields.io/badge/Three.js-e8c205?style=flat-square&logo=three.js&logoColor=black)](https://threejs.org/)
